@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Global Trader Platform</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">▲</span> Global Trader <span class="muted">Platform</span></div>
+  <span id="mode" class="badge"></span>
+  <div class="keybox">
+    <input id="apikey" type="password" placeholder="API key" autocomplete="off" aria-label="API key">
+    <button id="savekey">Use key</button>
+    <span id="planinfo" class="muted"></span>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button data-tab="markets" class="active">Markets</button>
+  <button data-tab="company">Company 360</button>
+  <button data-tab="screener">Screener</button>
+  <button data-tab="backtest">Backtest</button>
+  <button data-tab="options">Options</button>
+  <button data-tab="funds">Mutual Funds</button>
+  <button data-tab="news">News</button>
+  <button data-tab="plans">Plans &amp; API</button>
+</nav>
+
+<main>
+  <div id="toast" class="toast" hidden></div>
+
+  <!-- Markets -->
+  <section id="tab-markets" class="tab active">
+    <div class="row">
+      <div class="card grow">
+        <form id="chartform" class="controls">
+          <input name="symbol" value="RELIANCE" aria-label="Symbol" required>
+          <select name="exchange"><option>NSE</option><option>BSE</option><option>NSE_IDX</option><option>NFO</option><option>MCX</option></select>
+          <select name="periodicity"><option>DAY</option><option>WEEK</option><option>MONTH</option><option>HOUR</option><option>MINUTE</option></select>
+          <input name="bars" type="number" value="250" min="20" aria-label="Bars">
+          <button>Load chart</button>
+        </form>
+        <div id="quotebar" class="quotebar"></div>
+        <div class="chartwrap tall"><canvas id="pricechart"></canvas></div>
+        <div class="chartwrap short"><canvas id="rsichart"></canvas></div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="card grow">
+        <h3>Watchlist</h3>
+        <form id="wlform" class="controls">
+          <input name="watchlist" value="RELIANCE,TCS,HDFCBANK,INFY,ICICIBANK" class="wide" aria-label="Watchlist">
+          <button>Refresh</button>
+        </form>
+        <div id="pulse"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Company 360 -->
+  <section id="tab-company" class="tab">
+    <form id="c360form" class="controls card">
+      <input name="symbol" value="TCS" aria-label="Symbol" required>
+      <button>Analyse</button>
+      <span class="muted">Combines price, fundamentals, shareholding, corporate filings and news sentiment.</span>
+    </form>
+    <div id="c360"></div>
+  </section>
+
+  <!-- Screener -->
+  <section id="tab-screener" class="tab">
+    <div class="card">
+      <form id="screenform" class="controls">
+        <select name="preset" id="presets"><option value="">Custom</option></select>
+        <input name="sort" placeholder="sort, e.g. -change_3m_pct" aria-label="Sort">
+        <button>Run screen</button>
+      </form>
+      <div id="filters"></div>
+      <button id="addfilter" class="ghost">+ Add filter</button>
+      <p class="muted small">Fields: <span id="fieldlist"></span></p>
+    </div>
+    <div id="screenres" class="card"></div>
+  </section>
+
+  <!-- Backtest -->
+  <section id="tab-backtest" class="tab">
+    <div class="card">
+      <form id="btform" class="controls">
+        <input name="symbol" value="INFY" aria-label="Symbol" required>
+        <select name="strategy" id="strategies"></select>
+        <input name="params" placeholder='params JSON, e.g. {"fast":10,"slow":40}' class="wide" aria-label="Parameters">
+        <input name="bars" type="number" value="1000" min="30" aria-label="Bars">
+        <input name="cost_bps" type="number" value="10" step="0.5" aria-label="Cost (bps)">
+        <button>Run backtest</button>
+      </form>
+    </div>
+    <div id="btres"></div>
+  </section>
+
+  <!-- Options -->
+  <section id="tab-options" class="tab">
+    <div class="card">
+      <form id="ocform" class="controls">
+        <input name="product" value="NIFTY" aria-label="Product" required>
+        <input name="expiry" placeholder="expiry e.g. 30OCT2026 (optional)" aria-label="Expiry">
+        <button>Load chain</button>
+      </form>
+      <div id="ocres"></div>
+    </div>
+  </section>
+
+  <!-- Funds -->
+  <section id="tab-funds" class="tab">
+    <div class="card">
+      <form id="mfsearch" class="controls">
+        <input name="name" value="direct" aria-label="Scheme name">
+        <button>Search schemes</button>
+      </form>
+      <div id="mflist"></div>
+    </div>
+    <div class="card">
+      <h3>Portfolio overlap</h3>
+      <form id="mfoverlap" class="controls">
+        <input name="a" value="122639" aria-label="Scheme A code">
+        <input name="b" value="120716" aria-label="Scheme B code">
+        <button>Compare holdings</button>
+      </form>
+      <div id="mfov"></div>
+    </div>
+    <div id="mfdetail"></div>
+  </section>
+
+  <!-- News -->
+  <section id="tab-news" class="tab">
+    <div class="card">
+      <form id="newsform" class="controls">
+        <input name="symbols" value="RELIANCE,TCS,INFY" class="wide" aria-label="Symbols">
+        <button>Load news</button>
+        <button type="button" id="streambtn" class="ghost">Start live stream</button>
+      </form>
+      <div id="newssent"></div>
+    </div>
+    <div id="newslist"></div>
+  </section>
+
+  <!-- Plans -->
+  <section id="tab-plans" class="tab">
+    <div id="planlist" class="grid3"></div>
+    <div class="card">
+      <h3>Use the API</h3>
+      <p>Every endpoint takes your key in the <code>X-API-Key</code> header. The full reference is at <a href="/docs">/docs</a>.</p>
+      <pre id="snippet"></pre>
+    </div>
+  </section>
+</main>
+
+<footer class="muted small">Data: Global Datafeeds (price, fundamentals, mutual funds, news). <span id="demonote"></span></footer>
+<script src="/static/app.js"></script>
+</body>
+</html>
