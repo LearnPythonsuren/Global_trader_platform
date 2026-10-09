@@ -27,10 +27,16 @@ Plans, prices and limits are in `gtp/platform/plans.py`. The prices there are pl
 
 ## Quick start (demo mode, no keys needed)
 
-```bash
-pip install -r requirements.txt
-python -m gtp serve            # http://127.0.0.1:8000
-```
+You need Python 3.10 or newer. One command sets up the folder: it creates a `.venv` virtual environment, installs dependencies, creates `.env` in demo mode, and runs the tests.
+
+| | Linux / macOS | Windows |
+|---|---|---|
+| Set up (once) | `./scripts/setup.sh` | `scripts\setup.bat` |
+| Start the app | `./scripts/run.sh` | `scripts\run.bat` |
+
+Extra arguments go to the server, e.g. `./scripts/run.sh --port 9000 --host 0.0.0.0`.
+
+Developers: run tests with `.venv/bin/python -m pytest` and lint with `.venv/bin/ruff check .`. Claude Code cloud sessions install everything automatically through `.claude/hooks/session-start.sh`.
 
 Open http://127.0.0.1:8000 for the dashboard and http://127.0.0.1:8000/docs for the interactive API reference. Demo mode creates three keys: `demo-free-key`, `demo-pro-key` and `demo-algo-key`. **Demo mode only serves synthetic data.** The dashboard marks it with a DEMO DATA badge.
 
@@ -73,6 +79,7 @@ gtp/
   api/          FastAPI app, auth and plan gating
   web/          dashboard (plain JS and Chart.js)
   cli.py        serve / customer / check
+scripts/        setup and run scripts for Linux/macOS (.sh) and Windows (.bat)
 tests/          pytest suite (python -m pytest)
 ```
 

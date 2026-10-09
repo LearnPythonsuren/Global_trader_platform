@@ -57,10 +57,10 @@ def rsi(values: Sequence[float], n: int = 14) -> Series:
     return out
 
 
-def _rsi(g: float, l: float) -> float:
-    if l == 0:
-        return 100.0 if g > 0 else 50.0
-    return 100 - 100 / (1 + g / l)
+def _rsi(gain: float, loss: float) -> float:
+    if loss == 0:
+        return 100.0 if gain > 0 else 50.0
+    return 100 - 100 / (1 + gain / loss)
 
 
 def macd(values: Sequence[float], fast: int = 12, slow: int = 26, signal: int = 9) -> dict[str, Series]:
