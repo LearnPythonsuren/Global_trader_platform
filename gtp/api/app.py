@@ -107,10 +107,13 @@ class Assets(StaticFiles):
         response = await super().get_response(path, scope)
         if response.status_code in (200, 304):
             if path.endswith(".woff2"):
+                # Fonts never change at a given URL, so they can be cached hard.
                 response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
             else:
-                response.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
-                response.headers["Vercel-CDN-Cache-Control"] = "public, max-age=86400"
+                # JS/CSS must always reflect the current deploy: revalidate at the browser and at the
+                # edge (no long Vercel-CDN cache), so a push is visible immediately and never mixes
+                # an old bundle with a new API.
+                response.headers["Cache-Control"] = "no-cache"
             response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
