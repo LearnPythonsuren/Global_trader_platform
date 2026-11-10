@@ -207,7 +207,8 @@ export async function chartView(root, ctx) {
     el('button', { class: 'btn', onclick: () => ctx.openSymbol(symInput.value.trim().toUpperCase()) }, '360° view'),
   ]));
 
-  const head = el('div', { class: 'card-head' }, [el('div', { id: 'chart-title', class: 'row', style: 'gap:12px' }), tfSeg]);
+  const titleEl = el('div', { id: 'chart-title', class: 'row', style: 'gap:12px' });
+  const head = el('div', { class: 'card-head' }, [titleEl, tfSeg]);
   const readout = el('div', { class: 'chart-readout', hidden: true });
   const canvas = el('canvas', { style: 'height:460px' });
   const chartCard = el('div', { class: 'card' }, [head, el('div', { style: 'margin-bottom:10px' }, indBar), el('div', { class: 'chart-shell' }, [readout, canvas])]);
@@ -244,7 +245,7 @@ export async function chartView(root, ctx) {
       chart.set({ candles: h.candles, overlays, lower, type: ['1W', '1M'].includes(tf) ? 'candle' : 'candle' });
       const last = h.candles[h.candles.length - 1], first = h.candles[0];
       const chg = last && first ? (last.c / h.candles[Math.max(0, h.candles.length - 2)].c - 1) * 100 : 0;
-      ctx.$('#chart-title').replaceChildren(
+      titleEl.replaceChildren(
         el('b', { class: 'mono', style: 'font-size:18px' }, sym),
         el('span', { class: 'mono', style: 'font-size:18px' }, num(last?.c)),
         changePill(chg),

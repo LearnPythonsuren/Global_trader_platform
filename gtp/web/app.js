@@ -105,18 +105,26 @@ function navigate(view, params = {}) {
   const next = `#${view}${sym}`;
   if (location.hash === next) route(); else location.hash = next;
 }
+let routeEpoch = 0;
 async function route() {
+  const epoch = ++routeEpoch;                       // supersede any earlier in-flight render
   const { view, params } = parseHash();
   ctx.params = params;
   for (const fn of leaveHooks) { try { fn(); } catch {} }
   leaveHooks = [];
   $$('.rail-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   const host = $('#view');
-  host.innerHTML = '';
+  // Render into a fresh container and swap it in. A view that resolves late then appends to its
+  // own now-detached container instead of leaking into whatever view is current.
+  const page = el('div', { class: 'view-page' });
+  host.replaceChildren(page);
   host.scrollTop = 0; window.scrollTo(0, 0);
-  try { await VIEWS[view].render(host, ctx); }
-  catch (e) { host.innerHTML = ''; host.append(el('div', { class: 'empty down' }, `View error: ${esc(e.message)}`)); console.error(e); }
-  host.focus({ preventScroll: true });
+  try { await VIEWS[view].render(page, ctx); }
+  catch (e) {
+    if (epoch === routeEpoch) { page.replaceChildren(el('div', { class: 'empty down' }, `View error: ${esc(e.message)}`)); }
+    console.error(e);
+  }
+  if (epoch === routeEpoch) host.focus({ preventScroll: true });
 }
 
 // ---- theme -----------------------------------------------------------------
