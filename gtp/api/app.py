@@ -26,8 +26,40 @@ from ..gdf import fundamentals as fmod
 from ..gdf import mutualfunds as mfmod
 from ..gdf.news import normalize_article
 from ..platform import plans as P
+from ..documents import build_documents
+from ..net import FetchError, FetchNotAllowed
 from ..platform.store import Customer, Store
 from .deps import current_customer, require, require_admin
+
+# Response headers applied to every response (SSE-safe pure-ASGI middleware below).
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=(), payment=()",
+}
+
+
+class SecurityHeaders:
+    """Pure-ASGI middleware that adds security headers without buffering the body (keeps SSE working)."""
+
+    def __init__(self, app, headers: dict[str, str]):
+        self.app = app
+        self.headers = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                present = {k for k, _ in message["headers"]}
+                message["headers"].extend((k, v) for k, v in self.headers if k not in present)
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 DAY = 86400
@@ -160,6 +192,11 @@ class BacktestRequest(BacktestBase):
     include_equity: bool = True
 
 
+class DocRead(BaseModel):
+    url: str
+    kind: Optional[Literal["pdf", "audio"]] = None
+
+
 class NewCustomer(BaseModel):
     name: str
     email: str
@@ -194,6 +231,8 @@ def create_app(settings: Settings | None = None, hub: DataHub | None = None, sto
     app.state.hub = hub or DataHub.from_settings(settings)
     app.state.store = store or Store(settings.db_path)
     app.state.broker = NewsBroker()
+    app.state.documents = build_documents(settings)
+    app.add_middleware(SecurityHeaders, headers=SECURITY_HEADERS)
 
     if settings.demo and not app.state.store.list_customers():
         for plan_id, key in DEMO_KEYS.items():
@@ -226,6 +265,14 @@ def _register_errors(app: FastAPI) -> None:
     @app.exception_handler(LookupError)
     async def _lookup(_: Request, e: LookupError):
         return JSONResponse({"detail": str(e).strip("'\"")}, status_code=404)
+
+    @app.exception_handler(FetchNotAllowed)
+    async def _blocked(_: Request, e: FetchNotAllowed):
+        return JSONResponse({"detail": f"Blocked by document policy: {e}"}, status_code=403)
+
+    @app.exception_handler(FetchError)
+    async def _fetch(_: Request, e: FetchError):
+        return JSONResponse({"detail": str(e)}, status_code=502)
 
 
 def _routes(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes reads best here
@@ -400,6 +447,35 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes reads b
                 _: Customer = Depends(require(P.COMPANY_360))):
         return services.company_360(hub(), symbol, price_exchange=price_exchange,
                                     fundamental_exchange=fundamental_exchange)
+
+    # -- earnings calls & documents -------------------------------------------
+    @app.get("/v1/earnings/calendar", tags=["earnings"])
+    def earnings_calendar(range: str = Query("Next7days", description="Next7days, Next30days, Previous7days, …"),  # noqa: A002
+                          exchange: str = "BSE", _: Customer = Depends(require(P.EARNINGS))):
+        """Upcoming and recent company results dates — the earnings calendar."""
+        return services.earnings_calendar(hub(), exchange=exchange, range_=range)
+
+    @app.get("/v1/earnings/{symbol}", tags=["earnings"])
+    def earnings_company(symbol: str, exchange: str = "BSE", _: Customer = Depends(require(P.EARNINGS))):
+        """One company's next results date and its recent earnings-call documents (transcript, audio, deck)."""
+        return services.earnings_overview(hub(), symbol, exchange=exchange)
+
+    @app.get("/v1/documents/providers", tags=["earnings"])
+    def document_providers(_: Customer = Depends(require(P.EARNINGS))):
+        """What the document reader can do here: which hosts are allowed and whether transcription is configured."""
+        return app.state.documents.providers()
+
+    @app.post("/v1/documents/read", tags=["earnings"])
+    def documents_read(req: DocRead, customer: Customer = Depends(require(P.EARNINGS))):
+        """Read an earnings-call document: extract text from a filing PDF, or transcribe a call recording.
+
+        Only allowlisted exchange/vendor hosts can be fetched. Audio transcription needs the Algo plan.
+        """
+        from ..documents import classify
+        if classify(req.url, req.kind) == "audio" and P.TRANSCRIPTS not in customer.plan.features:
+            upgrade = next((p.name for p in P.PLANS.values() if P.TRANSCRIPTS in p.features), "a higher plan")
+            raise HTTPException(403, f"Audio transcription is not in the {customer.plan.name} plan; upgrade to {upgrade}")
+        return app.state.documents.read(req.url, req.kind)
 
     # -- screener & backtest ------------------------------------------------------------
     @app.get("/v1/screener/presets", tags=["intelligence"])

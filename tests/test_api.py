@@ -158,3 +158,39 @@ def test_store_falls_back_when_path_is_not_writable(tmp_path):
         store.close()
         import os
         os.remove(store.path)
+
+
+def test_earnings_and_documents(client):
+    cal = client.get('/v1/earnings/calendar?range=Next7days', headers=ALGO).json()
+    assert cal['range'] == 'Next7days' and (cal['upcoming'] or cal['recent'])
+    ov = client.get('/v1/earnings/TCS', headers={'X-API-Key': 'demo-pro-key'}).json()
+    kinds = {d['kind'] for d in ov['documents']}
+    assert {'transcript', 'audio', 'presentation', 'results'} <= kinds
+    # free plan cannot see earnings
+    assert client.get('/v1/earnings/TCS', headers=FREE).status_code == 403
+    # read a transcript PDF (pro plan)
+    doc = next(d for d in ov['documents'] if d['kind'] == 'transcript')
+    pdf = client.post('/v1/documents/read', json={'url': doc['url']}, headers={'X-API-Key': 'demo-pro-key'}).json()
+    assert pdf['kind'] == 'pdf' and pdf['chars'] > 100 and 'Conference Call' in pdf['text']
+    # audio transcription: algo yes, pro no
+    audio = next(d for d in ov['documents'] if d['is_audio'])
+    algo = client.post('/v1/documents/read', json={'url': audio['url']}, headers=ALGO).json()
+    assert algo['available'] and algo['transcript']
+    assert client.post('/v1/documents/read', json={'url': audio['url']}, headers={'X-API-Key': 'demo-pro-key'}).status_code == 403
+
+
+def test_document_reader_blocks_ssrf(client):
+    for bad in ['http://169.254.169.254/latest/meta-data', 'https://localhost/x.pdf',
+                'https://evil.com/x.pdf', 'https://bseindia.com.evil.com/x.pdf',
+                'https://demo.gtp.local.evil.com/ec/TCS/Q2FY27/audio.mp3']:
+        r = client.post('/v1/documents/read', json={'url': bad}, headers=ALGO)
+        assert r.status_code == 403, bad
+
+
+def test_security_headers_on_every_response(client):
+    h = client.get('/health').headers
+    assert h['x-content-type-options'] == 'nosniff' and h['x-frame-options'] == 'DENY'
+    assert 'strict-transport-security' in h and h['referrer-policy'] == 'no-referrer'
+    # present on the dashboard page too, alongside its CSP
+    page = client.get('/').headers
+    assert page['x-frame-options'] == 'DENY' and 'content-security-policy' in page

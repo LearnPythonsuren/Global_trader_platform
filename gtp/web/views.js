@@ -284,13 +284,14 @@ export async function screener(root, ctx) {
     const field = el('select', { class: 'input' }, numericFields.map((n) => el('option', { value: n, selected: n === f.field }, n)));
     const op = el('select', { class: 'input', style: 'width:72px' }, ['<', '<=', '>', '>=', '==', 'between'].map((o) => el('option', { value: o, selected: o === f.op }, o)));
     const val = el('input', { class: 'input mono', style: 'width:120px', value: Array.isArray(f.value) ? f.value.join(',') : f.value, placeholder: 'value' });
-    const rowEl = el('div', { class: 'row', style: 'gap:6px' }, [field, op, val,
+    field.style.cssText = 'flex:1;min-width:120px'; val.style.width = '110px';
+    const rowEl = el('div', { class: 'row wrap', style: 'gap:6px' }, [field, op, val,
       el('button', { class: 'icon-btn', onclick: () => { rowEl.remove(); const i = filters.indexOf(rec); if (i >= 0) filters.splice(i, 1); } }, rawIcon('close', 15))]);
     const rec = { get field() { return field.value; }, get op() { return op.value; }, get value() { const v = val.value.trim(); return op.value === 'between' ? v.split(',').map(Number) : (isNaN(Number(v)) ? v : Number(v)); } };
     filters.push(rec); filtersBox.append(rowEl);
   }
 
-  const presetSel = el('select', { class: 'input', style: 'min-width:180px' }, [el('option', { value: '' }, 'Custom filters'),
+  const presetSel = el('select', { class: 'input', style: 'min-width:160px;width:260px;max-width:100%' }, [el('option', { value: '' }, 'Custom filters'),
     ...Object.entries(meta.presets).map(([k, v]) => el('option', { value: k }, `${k} — ${v.description}`))]);
   const sortInput = el('input', { class: 'input mono', style: 'width:150px', placeholder: 'sort e.g. -change_3m_pct' });
 
@@ -597,6 +598,110 @@ export async function news(root, ctx) {
   load();
 }
 
+// ============================================================ EARNINGS =======
+const DOC_LABEL = { transcript: 'Transcript', audio: 'Call audio', presentation: 'Presentation', results: 'Results', call: 'Event' };
+export async function earnings(root, ctx) {
+  const symInput = el('input', { class: 'input mono', style: 'width:150px', value: (ctx.params.symbol || 'TCS').toUpperCase() });
+  root.append(viewHeader('Earnings Calls', 'Upcoming results, concall transcripts and call recordings — read the PDF or transcribe the audio', [
+    el('form', { class: 'row', style: 'gap:8px', onsubmit: (e) => { e.preventDefault(); loadCompany(symInput.value.trim().toUpperCase()); } }, [
+      symInput, el('button', { class: 'btn', type: 'submit' }, rawIcon('search')),
+    ]),
+  ]));
+  const grid = el('div', { class: 'grid cols-3' });
+  const calCard = el('div', { class: 'card' });
+  const companyCard = el('div', { class: 'card span-2' });
+  grid.append(companyCard, calCard);
+  const reader = el('div', { class: 'card', style: 'margin-top:14px', hidden: true });
+  root.append(grid, reader);
+
+  let providers = { transcription: false };
+  try { providers = await api('/v1/documents/providers'); } catch { /* plan gate handled below */ }
+
+  // calendar
+  fill(calCard, () => api('/v1/earnings/calendar?range=Next30days'), (cal, host) => {
+    host.append(el('h3', {}, ['Earnings calendar', el('span', { class: 'muted' }, ' · next 30 days')]));
+    const rows = cal.upcoming.length ? cal.upcoming : cal.recent;
+    if (!rows.length) { host.append(el('div', { class: 'empty' }, 'No scheduled results')); return; }
+    host.append(el('div', { class: 'stack', style: 'gap:2px' }, rows.slice(0, 14).map((r) => el('div', {
+      class: 'row spread', style: 'padding:7px 0;border-bottom:1px solid var(--border-soft);cursor:pointer',
+      onclick: () => { symInput.value = r.symbol; loadCompany(r.symbol); },
+    }, [
+      el('div', { class: 'stack', style: 'gap:1px' }, [el('b', { class: 'mono' }, r.symbol), el('span', { class: 'tiny faint', style: 'max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, r.name || '')]),
+      el('div', { class: 'stack', style: 'text-align:right;gap:1px' }, [el('span', { class: 'mono mini' }, (r.date || '').slice(0, 10)), r.change_pct != null ? changePill(r.change_pct) : null]),
+    ]))));
+  });
+
+  async function loadCompany(sym) {
+    reader.hidden = true;
+    companyCard.innerHTML = '<div class="empty"><span class="spinner"></span></div>';
+    let data;
+    try { data = await api(`/v1/earnings/${enc(sym)}`); }
+    catch (e) {
+      companyCard.innerHTML = '';
+      companyCard.append(el('div', { class: 'empty' }, [el('div', { class: 'down', style: 'margin-bottom:6px' }, e.status === 403 ? 'Earnings is a Trader Pro feature' : 'Could not load'), el('div', { class: 'mini muted' }, e.detail || e.message)]));
+      return;
+    }
+    companyCard.innerHTML = '';
+    const next = data.upcoming?.[0];
+    companyCard.append(el('div', { class: 'card-head' }, [
+      el('h3', {}, [el('b', { class: 'mono' }, data.symbol), el('span', { class: 'muted', style: 'margin-left:8px' }, 'earnings calls')]),
+      next ? el('span', { class: 'chip accent' }, `Next results ${(next.date || '').slice(0, 10)}`) : el('span', { class: 'chip' }, 'No date announced'),
+    ]));
+    const docs = data.documents.filter((d) => d.url);
+    if (!docs.length) { companyCard.append(el('div', { class: 'empty' }, 'No earnings-call documents filed recently')); return; }
+    companyCard.append(el('div', { class: 'stack', style: 'gap:2px' }, docs.map((d) => el('div', {
+      class: 'row spread', style: 'padding:9px 0;border-bottom:1px solid var(--border-soft)',
+    }, [
+      el('div', { class: 'row', style: 'gap:10px;min-width:0;flex:1' }, [
+        el('span', { class: `chip ${d.is_audio ? 'neu' : 'accent'}`, style: 'min-width:92px;justify-content:center;flex-shrink:0' }, [rawIcon(d.is_audio ? 'mic' : 'doc', 13), DOC_LABEL[d.kind] || d.kind]),
+        el('div', { class: 'stack', style: 'gap:1px;min-width:0' }, [
+          el('span', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0' }, d.headline),
+          el('span', { class: 'tiny faint' }, (d.date || '').slice(0, 16).replace('T', ' ')),
+        ]),
+      ]),
+      el('button', { class: 'btn', style: 'height:30px;flex-shrink:0', onclick: () => openDoc(d) }, d.is_audio ? [rawIcon('mic', 14), 'Transcribe'] : [rawIcon('doc', 14), 'Read']),
+    ]))));
+  }
+
+  async function openDoc(d) {
+    reader.hidden = false;
+    reader.innerHTML = `<div class="card-head"><h3>${esc(d.headline)}</h3></div><div class="empty"><span class="spinner"></span> ${d.is_audio ? 'transcribing audio…' : 'extracting text…'}</div>`;
+    reader.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    try {
+      const r = await api('/v1/documents/read', { method: 'POST', body: { url: d.url } });
+      reader.innerHTML = '';
+      const meta = [];
+      if (r.kind === 'pdf') meta.push(el('span', { class: 'chip mini' }, `${r.pages} pages`), el('span', { class: 'chip mini' }, `${num(r.chars, 0)} chars`));
+      if (r.demo) meta.push(el('span', { class: 'chip neu mini' }, 'demo document'));
+      if (r.duration_min) meta.push(el('span', { class: 'chip mini' }, `${r.duration_min} min`));
+      reader.append(el('div', { class: 'card-head' }, [
+        el('h3', {}, [rawIcon(d.is_audio ? 'mic' : 'doc', 15), d.headline]),
+        el('div', { class: 'row', style: 'gap:6px' }, meta),
+      ]));
+      if (r.kind === 'audio') {
+        if (!r.available) {
+          reader.append(el('div', { class: 'stack', style: 'gap:10px' }, [
+            el('div', { class: 'mini muted' }, r.message),
+            el('audio', { controls: '', src: r.source, style: 'width:100%' }),
+          ]));
+          return;
+        }
+        if (!String(r.source).includes('demo.gtp.local')) reader.append(el('audio', { controls: '', src: r.source, style: 'width:100%;margin-bottom:10px' }));
+      }
+      const text = r.kind === 'audio' ? r.transcript : r.text;
+      reader.append(el('div', {
+        class: 'mono', style: 'white-space:pre-wrap;line-height:1.7;font-size:12.5px;max-height:480px;overflow-y:auto;background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:14px',
+      }, text || '(no text could be extracted)'));
+      if (d.url && !String(d.url).includes('demo.gtp.local')) reader.append(el('a', { class: 'mini', href: d.url, target: '_blank', rel: 'noopener noreferrer', style: 'margin-top:8px;display:inline-block' }, 'Source filing ↗'));
+    } catch (e) {
+      reader.innerHTML = '';
+      reader.append(el('div', { class: 'empty down' }, e.detail || e.message));
+    }
+  }
+
+  loadCompany(symInput.value.trim().toUpperCase());
+}
+
 // ============================================================ API / ACCOUNT ==
 export async function account(root, ctx) {
   root.append(viewHeader('API & Account', 'Your plan, usage and the endpoints behind every screen'));
@@ -734,7 +839,8 @@ export async function renderCompany(host, symbol, ctx) {
   // actions
   host.append(el('div', { class: 'row', style: 'gap:8px' }, [
     el('button', { class: 'btn primary', style: 'flex:1', onclick: () => { ctx.closeDrawer(); ctx.navigate('chart', { symbol: data.symbol }); } }, 'Open chart'),
-    el('button', { class: 'btn', onclick: () => { ctx.toggleWatch(data.symbol); toast(`${data.symbol} watchlist updated`, 'success'); } }, 'Watchlist'),
+    el('button', { class: 'btn', onclick: () => { ctx.closeDrawer(); ctx.navigate('earnings', { symbol: data.symbol }); } }, 'Earnings'),
+    el('button', { class: 'btn', onclick: () => { ctx.toggleWatch(data.symbol); toast(`${data.symbol} watchlist updated`, 'success'); } }, 'Watch'),
   ]));
 }
 function kvGrid(items) {
@@ -752,6 +858,7 @@ export const VIEWS = {
   chart: { label: 'Chart', icon: 'chart', render: chartView },
   screener: { label: 'Screener', icon: 'screener', render: screener },
   lab: { label: 'Lab', icon: 'lab', render: lab },
+  earnings: { label: 'Earnings', icon: 'calendar', render: earnings },
   options: { label: 'Options', icon: 'options', render: optionsView },
   funds: { label: 'Funds', icon: 'funds', render: funds },
   news: { label: 'News', icon: 'news', render: news },

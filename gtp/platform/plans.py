@@ -20,6 +20,8 @@ OPTIONS = "options"            # option chain + PCR / max pain
 BACKTEST = "backtest"
 STREAM = "stream"              # real-time news stream (server-sent events)
 RAW = "raw"                    # pass-through to any documented GDF function
+EARNINGS = "earnings"          # earnings calendar + concall transcript PDF reader
+TRANSCRIPTS = "transcripts"    # audio earnings-call transcription
 
 
 @dataclass(frozen=True)
@@ -41,12 +43,13 @@ PLANS: dict[str, Plan] = {
              frozenset({QUOTES, HISTORY, NEWS, MUTUAL_FUNDS}), 5, 500,
              "Quotes, charts, news and mutual fund NAVs for personal use."),
         Plan("pro", "Trader Pro", 1_499, 120, 20_000,
-             frozenset({QUOTES, HISTORY, NEWS, MUTUAL_FUNDS, FUNDAMENTALS, COMPANY_360, SCREENER, OPTIONS}), 25, 5_000,
-             "Adds fundamentals, Company 360, the screener and option-chain analytics."),
+             frozenset({QUOTES, HISTORY, NEWS, MUTUAL_FUNDS, FUNDAMENTALS, COMPANY_360, SCREENER, OPTIONS, EARNINGS}), 25, 5_000,
+             "Adds fundamentals, Company 360, the screener, option-chain analytics and the earnings-call reader."),
         Plan("algo", "Algo Developer", 4_999, 600, 250_000,
              frozenset({QUOTES, HISTORY, NEWS, MUTUAL_FUNDS, FUNDAMENTALS, COMPANY_360, SCREENER, OPTIONS,
-                        BACKTEST, STREAM, RAW}), 100, 50_000,
-             "Everything, plus backtesting, the real-time news stream and raw GDF pass-through."),
+                        BACKTEST, STREAM, RAW, EARNINGS, TRANSCRIPTS}), 100, 50_000,
+             "Everything, plus backtesting, the real-time news stream, earnings-call audio transcription "
+             "and raw GDF pass-through."),
     )
 }
 

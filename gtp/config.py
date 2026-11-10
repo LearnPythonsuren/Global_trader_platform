@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .net import DEFAULT_DOC_HOSTS
+
 # Fifty liquid NSE large caps. Replace with your own list through GTP_UNIVERSE_CSV.
 DEFAULT_UNIVERSE = [
     "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK",
@@ -67,6 +69,13 @@ class Settings:
     http_timeout: float = 15.0
     diagnostic_retries: int = 5
 
+    # Earnings-call document reader: allowlisted hosts and optional transcription service.
+    doc_allowed_hosts: list[str] = field(default_factory=lambda: list(DEFAULT_DOC_HOSTS))
+    doc_max_bytes: int = 30_000_000
+    transcribe_url: str = ""
+    transcribe_key: str = ""
+    transcribe_model: str = "whisper-1"
+
     def __post_init__(self) -> None:
         if self.indices is None:
             self.indices = list(DEMO_INDICES if self.demo else DEFAULT_INDICES)
@@ -99,4 +108,9 @@ class Settings:
             index_exchange=e("GTP_INDEX_EXCHANGE", "NSE_IDX"),
             price_exchange=e("GTP_PRICE_EXCHANGE", "NSE"),
             fundamental_exchange=e("GTP_FUNDAMENTAL_EXCHANGE", "BSE"),
+            doc_allowed_hosts=([h.strip() for h in e("GTP_DOC_ALLOWED_HOSTS", "").split(",") if h.strip()]
+                               or list(DEFAULT_DOC_HOSTS)),
+            transcribe_url=e("GTP_TRANSCRIBE_URL", ""),
+            transcribe_key=e("GTP_TRANSCRIBE_KEY", ""),
+            transcribe_model=e("GTP_TRANSCRIBE_MODEL", "whisper-1"),
         )

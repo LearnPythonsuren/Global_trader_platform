@@ -274,6 +274,59 @@ def financial_trend(hub: Any, symbol: str, *, exchange: str = "BSE", quarters: i
     return rows[:quarters][::-1]
 
 
+EARNINGS_KINDS = {"transcript", "audio", "presentation", "results", "call"}
+
+
+def classify_earnings_doc(headline: str, category: str = "") -> str:
+    low = f"{headline} {category}".lower()
+    if "transcript" in low:
+        return "transcript"
+    if "audio" in low or "recording" in low:
+        return "audio"
+    if "presentation" in low:
+        return "presentation"
+    if "result" in low or "outcome of board meeting" in low:
+        return "results"
+    if "conference call" in low or "concall" in low or "earnings call" in low or "investor" in low or "analyst" in low:
+        return "call"
+    return "other"
+
+
+def earnings_calendar(hub: Any, *, exchange: str = "BSE", range_: str = "Next7days") -> dict:
+    """Upcoming (or recent) earnings dates across the market, newest first."""
+    rows = hub.fundamentals.results_calendar(exchange, range_) or []
+    today = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 19800))
+    for r in rows:
+        d = (r.get("date") or "")[:10]
+        r["upcoming"] = d >= today
+    rows.sort(key=lambda r: (r.get("date") or ""))
+    return {"range": range_, "exchange": exchange, "as_of": int(time.time()),
+            "upcoming": [r for r in rows if r["upcoming"]], "recent": [r for r in rows if not r["upcoming"]]}
+
+
+def earnings_overview(hub: Any, symbol: str, *, exchange: str = "BSE", days: int = 220) -> dict:
+    """One company's next results date and its recent earnings-call documents."""
+    symbol = symbol.strip().upper()
+    now = int(time.time())
+    out = _gather({
+        "upcoming": lambda: hub.fundamentals.results_calendar(exchange, "Next30days", [symbol]),
+        "announcements": lambda: hub.fundamentals.announcements(exchange, symbol, now - days * DAY, now),
+    })
+    docs = []
+    for a in (out["announcements"].get("data") or []):
+        kind = classify_earnings_doc(a.get("headline", ""), a.get("category", ""))
+        if kind == "other":
+            continue
+        docs.append({
+            "date": a.get("date"), "headline": a.get("headline"), "category": a.get("category"),
+            "url": a.get("url"), "kind": kind, "is_audio": kind == "audio",
+            "readable": bool(a.get("url")) and (kind == "audio" or str(a.get("url")).lower().split("?")[0].endswith(".pdf")),
+        })
+    return {"symbol": symbol, "generated_at": now, "demo": hub.demo,
+            "upcoming": out["upcoming"].get("data") or [], "upcoming_error": out["upcoming"].get("error"),
+            "documents": docs, "documents_error": out["announcements"].get("error")}
+
+
 def option_chain_summary(rows: list[dict]) -> dict:
     """Put-call ratio, max-pain strike, at-the-money strike and the strikes with the highest open interest."""
     calls = [r for r in rows if r.get("option_type") == "CE" and r.get("strike") is not None]

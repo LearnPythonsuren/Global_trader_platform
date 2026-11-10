@@ -68,6 +68,10 @@ const ICONS = {
   external: 'M14 5h5v5|M19 5l-8 8|M18 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h4',
   filter: 'M4 5h16l-6 8v5l-4 2v-7z',
   refresh: 'M4 12a8 8 0 0 1 14-5l2 2M20 5v4h-4|M20 12a8 8 0 0 1-14 5l-2-2M4 19v-4h4',
+  calendar: 'M4 6a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z|M4 9h16|M8 3v4|M16 3v4',
+  mic: 'M12 4a3 3 0 0 0-3 3v4a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3z|M6 11a6 6 0 0 0 12 0|M12 17v3|M9 20h6',
+  doc: 'M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z|M14 3v4h4|M8 13h8|M8 17h5',
+  play: 'M7 5l12 7-12 7z',
 };
 export function icon(name, size = 18) {
   const paths = (ICONS[name] || '').split('|').map((d) =>

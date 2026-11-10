@@ -245,6 +245,16 @@ class FundamentalsClient(BaseGDFClient):
         rows = _rows(self.call("GetBlockDeals", exchange=exchange, range=range_, instrumentIdentifier=symbol))
         return [normalize_deal(r) for r in rows]
 
+    def annual_reports(self, exchange: str, symbol: str, from_year: int, to_year: int) -> list[dict]:
+        rows = _rows(self.call("GetAnnualReports", exchange=exchange, instrumentIdentifiers=symbol,
+                               **{"from": from_year, "to": to_year}))
+        out = []
+        for r in rows:
+            out.append({"symbol": _text(r.get("ScripId")) or _text(r.get("Symbol")), "year": r.get("Year"),
+                        "url": _text(r.get("AttachmentUrl")) or _text(r.get("Url")), "from_year": r.get("FromYear"),
+                        "to_year": r.get("ToYear")})
+        return out
+
     def participants(self, exchange: str = "NSE", client_type: str | None = None,
                      from_ts: int | None = None, to_ts: int | None = None) -> list[dict]:
         """Participant-wise F&O open interest (FII, DII, Pro, Client): GDF's GetFIIDII."""

@@ -593,8 +593,10 @@ class DemoFundamentals:
         out = []
         for sym in symbols:
             name, _, code, *_rest = _company(sym)
+            if symbol:                       # earnings-call documents for the latest reported quarter
+                out.extend(_earnings_announcements(sym, name, code, to_ts, from_ts))
             rng = random.Random(_seed("announcements", sym, to_ts // (7 * DAY)))
-            for i, (category, text) in enumerate(rng.sample(_ANNOUNCEMENTS, 4 if symbol else 1)):
+            for i, (category, text) in enumerate(rng.sample(_ANNOUNCEMENTS, 3 if symbol else 1)):
                 when = to_ts - rng.randint(1, 9) * 3600 - i * rng.randint(2, 5) * DAY
                 if when < from_ts:
                     continue
@@ -680,6 +682,106 @@ class DemoFundamentals:
 
 # -- mutual funds ---------------------------------------------------------------
 # AMFI code: (scheme name, category, sub-category, base NAV, daily volatility, annual drift, AMC)
+def _fiscal_quarter(now: float) -> tuple[int, str, str]:
+    """(fiscal year, quarter code, label) of the most recently completed quarter."""
+    t = time.gmtime(now + IST_OFFSET)
+    fy = t.tm_year if t.tm_mon >= 4 else t.tm_year - 1
+    i = ((t.tm_mon - 4) % 12) // 3 - 1
+    if i < 0:
+        i, fy = 3, fy - 1
+    code = ("QJ", "QS", "QD", "QM")[i]
+    end_month = ("Jun", "Sep", "Dec", "Mar")[i]
+    year = fy + 1 if code == "QM" else fy
+    return fy, f"Q{i + 1}FY{str(fy + 1)[2:]}", f"{end_month} {year}"
+
+
+def _earnings_announcements(symbol: str, name: str, code: int, to_ts: float, from_ts: float) -> list[dict]:
+    """Transcript PDF, investor presentation, audio recording and results outcome for recent quarters."""
+    out = []
+    for q in range(2):
+        fy, tag, label = _fiscal_quarter(to_ts - q * 91 * DAY)
+        base = to_ts - q * 91 * DAY - 5 * DAY
+        url = lambda f: f"https://demo.gtp.local/ec/{symbol}/{tag}/{f}"  # noqa: E731
+        items = [
+            ("Outcome of Board Meeting", f"Outcome of Board Meeting - Audited Financial Results for {label}", url("results.pdf"), 0),
+            ("Investor Presentation", f"Investor Presentation - {label} Earnings", url("presentation.pdf"), 4 * 3600),
+            ("Transcript", f"Transcript of {label} Earnings Conference Call", url("transcript.pdf"), 3 * DAY),
+            ("Audio Recording", f"Audio Recording of {label} Earnings Conference Call", url("audio.mp3"), 2 * DAY),
+        ]
+        for category, headline, link, delay in items:
+            when = base - delay
+            if when < from_ts:
+                continue
+            out.append({"symbol": symbol, "name": name, "scrip_code": code, "date": _iso(when),
+                        "headline": headline, "body": f"[DEMO] {name}: {headline}.", "category": category,
+                        "critical": category == "Outcome of Board Meeting", "meeting_date": None, "url": link})
+    return out
+
+
+def _transcript_text(symbol: str, tag: str) -> str:
+    name = COMPANIES.get(symbol, (symbol,))[0]
+    rng = random.Random(_seed("transcript", symbol, tag))
+    rev = rng.uniform(5_000, 65_000)
+    growth = rng.uniform(6, 18)
+    margin = rng.uniform(14, 28)
+    eps = rng.uniform(8, 120)
+    guide = rng.choice(["double-digit", "steady", "mid-teens", "high single-digit"])
+    paras = [
+        "[DEMO TRANSCRIPT — synthetic, not a real filing]",
+        f"{name} — {tag} Earnings Conference Call",
+        "Moderator: Ladies and gentlemen, good day and welcome to the earnings conference call of "
+        f"{name}. We have with us the senior management team. As a reminder, all participant lines are in "
+        "listen-only mode. Please note that this conference is being recorded.",
+        "Management: Thank you, and good evening everyone. I am pleased to report another resilient quarter. "
+        f"Revenue for the quarter came in at approximately Rs {rev:,.0f} crore, a growth of about {growth:.1f}% "
+        f"year on year, led by broad-based demand across our key segments. Operating margin for the quarter was "
+        f"around {margin:.1f}%, reflecting disciplined cost management and operating leverage. Profit after tax "
+        f"translated to earnings per share of roughly Rs {eps:,.1f} for the quarter.",
+        "Management: On the demand environment, we continue to see healthy traction in domestic markets, while "
+        "the export book remains selective. Our order pipeline is robust and we remain focused on execution, "
+        f"working capital discipline and return ratios. For the full year we expect {guide} revenue growth, with "
+        "margins broadly in the range we have guided to earlier.",
+        "Moderator: Thank you. We will now begin the question-and-answer session.",
+        "Analyst: Congratulations on the quarter. My first question is on margins — how should we think about the "
+        "trajectory over the next few quarters given input-cost movements?",
+        "Management: Good question. We expect margins to remain range-bound with a modest upward bias as pricing "
+        "actions and efficiency programmes play through. We are not assuming any material change in commodity "
+        "costs in our guidance.",
+        "Analyst: And on capital allocation — any update on capex plans and the dividend policy?",
+        "Management: We continue to invest behind capacity and technology, and our board remains committed to a "
+        "consistent dividend payout. We will balance growth investments with returns to shareholders.",
+        "Moderator: Thank you. That concludes today's conference call. You may now disconnect your lines.",
+    ]
+    return "\n\n".join(paras)
+
+
+def demo_document(url: str, kind: str) -> dict:
+    """Return synthetic earnings-call content for a demo.gtp.local document URL."""
+    parts = url.split("/")
+    try:
+        symbol, tag = parts[-3], parts[-2]
+    except IndexError:
+        symbol, tag = "RELIANCE", "Q2FY27"
+    name = COMPANIES.get(symbol, (symbol,))[0]
+    filename = parts[-1].lower()
+    if kind == "audio" or filename.endswith((".mp3", ".wav", ".m4a")):
+        text = _transcript_text(symbol, tag)
+        return {"kind": "audio", "source": url, "available": True, "transcript": text,
+                "provider": "demo", "model": "demo-whisper", "demo": True, "duration_min": 42}
+    if "presentation" in filename:
+        body = (f"[DEMO] {name} — {tag} Investor Presentation.\n\nSlide 1: Financial highlights.\n"
+                "Slide 2: Segment performance.\nSlide 3: Outlook and guidance.\nThis is synthetic demo content.")
+    elif "results" in filename:
+        body = (f"[DEMO] {name} — Outcome of Board Meeting, {tag}.\n\nThe Board approved the audited financial "
+                "results for the quarter. Revenue, profit and EPS are reported in the accompanying statement. "
+                "Synthetic demo content.")
+    else:
+        body = _transcript_text(symbol, tag)
+    pages = max(1, body.count("\n\n") + 1)
+    return {"kind": "pdf", "source": url, "content_type": "application/pdf", "pages": pages,
+            "pages_read": pages, "chars": len(body), "truncated": False, "text": body, "demo": True}
+
+
 SCHEMES: dict[str, tuple] = {
     "122639": ("Parag Parikh Flexi Cap Fund - Direct Plan - Growth", "Equity", "Flexi Cap Fund", 90.0, 0.0075, 0.17, "PPFAS Mutual Fund"),
     "120716": ("UTI Nifty 50 Index Fund - Direct Plan - Growth", "Equity", "Index Fund", 170.0, 0.0085, 0.12, "UTI Mutual Fund"),
