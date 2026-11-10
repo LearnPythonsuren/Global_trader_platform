@@ -150,3 +150,34 @@ def test_option_chain_summary():
     priced = [{"strike": k, "option_type": t, "open_interest": 1, "ltp": p} for k, t, p in
               ((90, "CE", 12), (90, "PE", 1), (100, "CE", 4), (100, "PE", 3.5), (110, "CE", 1), (110, "PE", 11))]
     assert services.option_chain_summary(priced)["atm_strike"] == 100
+
+
+def test_classify_earnings_doc_from_real_announcement_wording():
+    c = services.classify_earnings_doc
+    # realistic BSE/NSE announcement headlines + descriptors (auto-collected, no dedicated API)
+    assert c("Transcript of Q2 FY2026-27 Earnings Conference Call", "Company Update") == "transcript"
+    assert c("Audio Recording of Earnings Conference Call", "Analysts/Institutional Investor Meet") == "audio"
+    assert c("Investor Presentation", "Press Release / Media Release") == "presentation"
+    assert c("Outcome of Board Meeting", "Board Meeting") == "results"
+    assert c("Audited Financial Results for the quarter ended September 2026", "Result") == "results"
+    assert c("Intimation of Earnings Conference Call with analysts", "Analysts/Institutional Investor Meet") == "call"
+    # detection can rely on the news body when the headline is terse
+    assert c("Company Update", "Company Update", "Please find attached the transcript of the earnings call.") == "transcript"
+    # unrelated announcements must NOT be collected as earnings material
+    assert c("Change in Directorate", "Change in Directors") == "other"
+    assert c("Allotment of Equity Shares under ESOP", "Allotment") == "other"
+    assert c("Trading Window Closure", "Company Update") == "other"
+    assert c("Dividend - Record Date Fixed", "Corp. Action") == "other"
+
+
+def test_earnings_overview_auto_collects_and_dedupes(hub):
+    ov = services.earnings_overview(hub, "TCS")
+    kinds = {d["kind"] for d in ov["documents"]}
+    assert {"transcript", "audio", "presentation", "results"} <= kinds
+    assert all(d["kind"] in services.EARNINGS_KINDS for d in ov["documents"])
+    assert all(d["readable"] == bool(d["url"]) for d in ov["documents"])
+    # newest first, and no duplicate (url, headline)
+    dates = [d["date"] for d in ov["documents"] if d["date"]]
+    assert dates == sorted(dates, reverse=True)
+    keys = [(d["url"], d["headline"]) for d in ov["documents"]]
+    assert len(keys) == len(set(keys))

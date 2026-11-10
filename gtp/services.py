@@ -276,19 +276,38 @@ def financial_trend(hub: Any, symbol: str, *, exchange: str = "BSE", quarters: i
 
 EARNINGS_KINDS = {"transcript", "audio", "presentation", "results", "call"}
 
+# Global Datafeeds has no dedicated earnings-call API: this material arrives through the
+# fundamental API's GetCorporateAnnouncements. The platform auto-detects it from whatever
+# that call returns by matching the exchange's own wording (headline, descriptor/category
+# and the news body), newest signal first.
+_EARNINGS_SIGNALS = (
+    ("transcript", ("transcript", "con call transcript", "concall transcript", "earnings call transcript")),
+    ("audio", ("audio recording", "audio of", "call recording", "recording of", "earnings call audio",
+               "concall audio", "con. call audio", "audio file")),
+    ("presentation", ("investor presentation", "analyst presentation", "earnings presentation",
+                      "investor/analyst presentation", "presentation to investors", "investor deck")),
+    ("results", ("financial results", "quarterly results", "audited results", "unaudited results",
+                 "outcome of board meeting", "standalone and consolidated", "statement of results",
+                 "board meeting outcome")),
+    ("call", ("earnings call", "earnings conference call", "conference call", "con. call", "con call",
+              "concall", "analyst meet", "investor meet", "institutional investor", "analysts/institutional",
+              "earnings call intimation", "investor/analyst call", "investor call")),
+)
 
-def classify_earnings_doc(headline: str, category: str = "") -> str:
-    low = f"{headline} {category}".lower()
-    if "transcript" in low:
-        return "transcript"
-    if "audio" in low or "recording" in low:
-        return "audio"
-    if "presentation" in low:
-        return "presentation"
-    if "result" in low or "outcome of board meeting" in low:
+
+def classify_earnings_doc(headline: str, category: str = "", body: str = "") -> str:
+    """Decide what kind of earnings-call material an announcement is, from its own text.
+
+    Works on whatever GetCorporateAnnouncements returns — the headline, the exchange
+    descriptor/category, and the news body — so no special API option is needed.
+    """
+    low = f"{headline or ''} {category or ''} {body or ''}".lower()
+    for kind, needles in _EARNINGS_SIGNALS:
+        if any(n in low for n in needles):
+            # "board meeting" that merely *schedules* results is still a results-related event.
+            return kind
+    if "board meeting" in low and ("result" in low or "financial" in low):
         return "results"
-    if "conference call" in low or "concall" in low or "earnings call" in low or "investor" in low or "analyst" in low:
-        return "call"
     return "other"
 
 
@@ -312,16 +331,21 @@ def earnings_overview(hub: Any, symbol: str, *, exchange: str = "BSE", days: int
         "upcoming": lambda: hub.fundamentals.results_calendar(exchange, "Next30days", [symbol]),
         "announcements": lambda: hub.fundamentals.announcements(exchange, symbol, now - days * DAY, now),
     })
-    docs = []
+    docs, seen = [], set()
     for a in (out["announcements"].get("data") or []):
-        kind = classify_earnings_doc(a.get("headline", ""), a.get("category", ""))
+        kind = classify_earnings_doc(a.get("headline", ""), a.get("category", ""), a.get("body", ""))
         if kind == "other":
             continue
+        key = (a.get("url"), a.get("headline"))
+        if key in seen:
+            continue
+        seen.add(key)
         docs.append({
             "date": a.get("date"), "headline": a.get("headline"), "category": a.get("category"),
             "url": a.get("url"), "kind": kind, "is_audio": kind == "audio",
-            "readable": bool(a.get("url")) and (kind == "audio" or str(a.get("url")).lower().split("?")[0].endswith(".pdf")),
+            "readable": bool(a.get("url")),           # any attached filing can be opened (PDF) or transcribed (audio)
         })
+    docs.sort(key=lambda d: d.get("date") or "", reverse=True)
     return {"symbol": symbol, "generated_at": now, "demo": hub.demo,
             "upcoming": out["upcoming"].get("data") or [], "upcoming_error": out["upcoming"].get("error"),
             "documents": docs, "documents_error": out["announcements"].get("error")}
