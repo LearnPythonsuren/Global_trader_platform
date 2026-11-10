@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import secrets
 import sqlite3
+import tempfile
 import threading
 import time
 from collections import deque
@@ -13,6 +16,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .plans import Plan, get_plan
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS customers (
@@ -74,15 +79,32 @@ class RateLimitExceeded(Exception):
 
 class Store:
     def __init__(self, path: str = "gtp.db"):
-        self.path = path
         self._lock = threading.Lock()
-        self._db = sqlite3.connect(path, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        with self._lock:
-            self._db.executescript(SCHEMA)
-            self._db.commit()
+        try:
+            self._db = self._open(path)
+            self.path = path
+        except sqlite3.OperationalError as e:
+            # Read-only filesystems (serverless hosts, locked-down containers): use the temp dir.
+            if path == ":memory:":
+                raise
+            fallback = os.path.join(tempfile.gettempdir(), os.path.basename(path) or "gtp.db")
+            log.warning("Cannot open database at %s (%s); using %s instead", path, e, fallback)
+            self._db = self._open(fallback)
+            self.path = fallback
         self._minute: dict[int, deque] = {}
         self._day_cache: dict[tuple[int, str], int] = {}
+
+    @staticmethod
+    def _open(path: str) -> sqlite3.Connection:
+        db = sqlite3.connect(path, check_same_thread=False)
+        try:
+            db.row_factory = sqlite3.Row
+            db.executescript(SCHEMA)
+            db.commit()
+        except sqlite3.OperationalError:
+            db.close()
+            raise
+        return db
 
     def close(self) -> None:
         self._db.close()

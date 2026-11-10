@@ -77,6 +77,7 @@ class Settings:
             news_api_key=e("GDF_NEWS_API_KEY", ""),
             webhook_secret=e("GTP_WEBHOOK_SECRET", ""),
             admin_token=e("GTP_ADMIN_TOKEN", ""),
-            db_path=e("GTP_DB_PATH", "gtp.db"),
+            # Vercel's filesystem is read-only except /tmp (and /tmp is per-instance, not durable).
+            db_path=e("GTP_DB_PATH", "/tmp/gtp.db" if e("VERCEL") else "gtp.db"),
             universe=_universe_from_csv(universe_csv) if universe_csv else list(DEFAULT_UNIVERSE),
         )

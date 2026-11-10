@@ -106,3 +106,16 @@ def test_rate_limits(tmp_path):
         store.check_and_record(c, "/v1/quote", now=1010.0)
     store.check_and_record(c, "/v1/quote", now=1061.0)  # window slid
     assert store.usage(c.id, days=100000)[0]["count"] == c.plan.requests_per_minute + 1
+
+
+def test_store_falls_back_when_path_is_not_writable(tmp_path):
+    # A path inside a missing directory cannot be opened; the store must fall back to the temp dir.
+    store = Store(str(tmp_path / "missing-dir" / "x.db"))
+    try:
+        assert store.path != str(tmp_path / "missing-dir" / "x.db")
+        c, key = store.create_customer("x", "x@x", "free")
+        assert store.customer_by_key(key).id == c.id
+    finally:
+        store.close()
+        import os
+        os.remove(store.path)

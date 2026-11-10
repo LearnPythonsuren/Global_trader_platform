@@ -25,7 +25,11 @@ build-backend = "setuptools.build_meta"
 include = ["gtp*"]
 
 [tool.setuptools.package-data]
-gtp = ["web/*"]
+gtp = ["web/**/*"]
+
+# Vercel: which ASGI app to serve (https://vercel.com/docs/frameworks/backend/fastapi)
+[tool.vercel]
+entrypoint = "gtp.asgi:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
