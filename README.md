@@ -2,12 +2,18 @@
 
 A product you can sell to traders and algo developers. It combines Global Datafeeds' four data APIs: **price**, **fundamentals**, **mutual funds** and **news**. On top of the data it adds analytics, paid plans, API keys and a web dashboard.
 
+It ships as a single-page **trading terminal** (dark/light, keyboard-driven, phone-friendly) backed by a FastAPI service, and deploys to Vercel as-is.
+
 | Global Datafeeds API | Docs | What the platform uses it for |
 |---|---|---|
 | Price data (REST) | [globaldatafeeds.in/…/global-datafeeds-apis](https://globaldatafeeds.in/global-datafeeds-apis/global-datafeeds-apis/) | Quotes, OHLC history, instrument search, option chains |
-| Fundamental / corporate data | [docs.globaldatafeeds.in](https://docs.globaldatafeeds.in/) | Ratios, results, shareholding, sector, announcements, corporate actions, deals |
+| Fundamental / corporate data | [docs.globaldatafeeds.in](https://docs.globaldatafeeds.in/) | Ratios, results, shareholding, sector, announcements, corporate actions, deals, **earnings calendar**, **concall transcripts / audio** |
 | Mutual funds | [mfdocs.globaldatafeeds.in](https://mfdocs.globaldatafeeds.in/) | Scheme master, NAV, NAV history, holdings |
 | News | [newsdocs.globaldatafeeds.in](https://newsdocs.globaldatafeeds.in/) | Company, multi-company and general news with sentiment, plus the push webhook |
+
+### The dashboard (`/`)
+
+A canvas-rendered terminal — no external JS, strict content-security-policy — with nine views: **Terminal** (indices, watchlist, movers, news), a **market heatmap**, a candlestick **Chart** (SMA/EMA/Bollinger/RSI/MACD), **Screener**, **Strategy Lab** (backtest + compare-all), **Earnings** (calendar, transcript reader, audio transcription), **Options** chain, **Funds**, and **News**. Plus a ⌘K command palette with live symbol search and a slide-in Company 360 drawer.
 
 ## What customers get
 
@@ -19,7 +25,10 @@ A product you can sell to traders and algo developers. It combines Global Datafe
 | **Company 360** | One call combines quote, technicals, ratios, sector, shareholding, filings, corporate actions and news, plus plain-English signals | Pro |
 | **Screener** | Filter a universe on fundamentals and technicals together (e.g. P/E < 25 and above the 200-day SMA). Includes presets | Pro |
 | **Option-chain analytics** | Full chain with PCR, max pain, and support/resistance from open interest | Pro |
+| **Market map** | Every stock sized by market value, coloured by day change, grouped by sector, with breadth | Starter |
+| **Earnings calendar & call reader** | Upcoming/recent results dates; a company's concall transcripts and investor decks, with the filing **PDF extracted to text** inline | Pro |
 | **Backtesting** | SMA/EMA cross, RSI mean reversion, Donchian breakout and MACD trend, with costs. Reports CAGR, Sharpe, Sortino, max drawdown, win rate and trades | Algo |
+| **Earnings-call audio transcription** | Transcribes a call recording via a configurable speech-to-text service | Algo |
 | **Real-time news stream** | Server-sent events fed by the GDF news webhook | Algo |
 | **Raw pass-through** | Any documented GDF function, through your key, limits and cache | Algo |
 
@@ -58,8 +67,20 @@ curl -H "X-API-Key: demo-algo-key" -X POST localhost:8000/v1/backtest \
    Admins can also use the HTTP API: `/admin/customers` with the `X-Admin-Token` header.
 4. Register the news webhook with GDF: `https://<your-host>/webhooks/gdf/news?token=<GTP_WEBHOOK_SECRET>`.
 5. Optional: set `GTP_UNIVERSE_CSV` to the index-constituents CSV that GDF sends monthly. The screener will then scan it, e.g. the Nifty 100.
+6. Optional: set `GTP_TRANSCRIBE_URL` / `GTP_TRANSCRIBE_KEY` to any OpenAI-compatible `/audio/transcriptions` service to turn on earnings-call audio transcription.
 
 If a customer's plan includes a feature but your GDF subscription doesn't, that section of Company 360 returns an `error` and the rest still works.
+
+## Deploy to Vercel
+
+The repo is Vercel-ready (`gtp/asgi.py` is the ASGI entrypoint; `[tool.vercel]` in `pyproject.toml` points Vercel at it). Import the repo on Vercel — it auto-detects the FastAPI preset — or run `vercel --prod`. Set `GTP_MODE`, the GDF keys, `GTP_ADMIN_TOKEN`, `GTP_WEBHOOK_SECRET` (and optionally the transcription keys) as Environment Variables. On serverless the SQLite customer store lives at `/tmp`; for durable customers/usage across instances, point `GTP_DB_PATH` at a hosted database or swap `Store` for Postgres.
+
+## Security
+
+- **API keys** are stored only as SHA-256 hashes; plan limits and a sliding-window rate limiter are enforced on every request; usage is metered per endpoint.
+- **Document reader** (earnings PDFs / audio) is SSRF-hardened: HTTPS-only, an exchange/vendor **host allowlist** (`GTP_DOC_ALLOWED_HOSTS` to extend), a resolved-IP public-address check, no redirect following, and size/time caps (`gtp/net.py`). Transcription credentials never leave the server.
+- **Headers**: a strict content-security-policy on the dashboard, and nosniff / frame-deny / HSTS / referrer / permissions-policy on every response (SSE-safe pure-ASGI middleware).
+- **Secrets** (GDF keys, admin token, webhook secret, transcription key) come from the environment and are never returned by the API or written to the repo.
 
 ## How it handles Global Datafeeds specifics
 
@@ -72,15 +93,18 @@ If a customer's plan includes a feature but your GDF subscription doesn't, that 
 
 ```
 gtp/
-  gdf/          Clients for the 4 GDF APIs, an offline demo provider, and the cache (DataHub)
+  gdf/          Clients for the 4 GDF APIs, a coherent offline demo market, and the cache (DataHub)
   analytics/    indicators, backtest, screener, funds, sentiment
-  services.py   Company 360, market pulse, option-chain summary
+  services.py   Company 360, market pulse, heatmap, earnings, option-chain summary
+  net.py        SSRF-safe document fetcher
+  documents.py  PDF text extraction and audio transcription
   platform/     plans, customers, API keys (stored hashed), metering, rate limits (SQLite)
-  api/          FastAPI app, auth and plan gating
-  web/          dashboard (plain JS and Chart.js)
+  api/          FastAPI app, auth, plan gating, security headers
+  asgi.py       ASGI entrypoint (local uvicorn and Vercel)
+  web/          terminal dashboard — ES modules, canvas charts, self-hosted font
   cli.py        serve / customer / check
 scripts/        setup and run scripts for Linux/macOS (.sh) and Windows (.bat)
-tests/          pytest suite (python -m pytest)
+tests/          pytest suite (python -m pytest) — 97 tests
 ```
 
 ## Before you sell this
