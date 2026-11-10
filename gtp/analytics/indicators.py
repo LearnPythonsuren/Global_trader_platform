@@ -176,6 +176,8 @@ def snapshot(candles: list[dict]) -> dict:
     trend = None
     if s50 is not None and s200 is not None:
         trend = "uptrend" if last > s50 > s200 else "downtrend" if last < s50 < s200 else "sideways"
+    volumes = [b.get("v") or 0 for b in candles[-21:]]
+    average_volume = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else 0
     return {
         "close": last,
         "rsi14": _round(rsi(c, 14)[-1]),
@@ -191,6 +193,9 @@ def snapshot(candles: list[dict]) -> dict:
         "high_52w": hi52,
         "low_52w": lo52,
         "pct_from_52w_high": _round((last / hi52 - 1) * 100) if hi52 else None,
+        "pct_from_52w_low": _round((last / lo52 - 1) * 100) if lo52 else None,
+        "macd_hist": _round(macd(c)["histogram"][-1]),
+        "volume_ratio": _round(volumes[-1] / average_volume) if average_volume else None,
         "volatility_1y_pct": _round(annualized_volatility(c[-253:])),
         "atr14": _round(atr([b["h"] or b["c"] for b in candles], [b["l"] or b["c"] for b in candles], c)[-1]),
     }

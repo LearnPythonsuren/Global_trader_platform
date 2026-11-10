@@ -48,6 +48,45 @@ def test_core_endpoints(client):
     assert len(h["candles"]) == 60 and set(h["indicators"]) == {"sma:20", "macd:12,26,9"}
 
 
+def test_new_endpoints(client):
+    meta = client.get("/v1/meta").json()
+    assert meta["mode"] == "demo" and meta["demo_key"] == "demo-algo-key" and "NIFTY 50" in meta["indices"]
+    assert len(meta["universe"]) == 50 and meta["session"]["open"] == "09:15"
+    h = client.get("/v1/market/heatmap", headers=FREE).json()
+    assert len(h["stocks"]) == 50 and len(h["sectors"]) >= 10 and len(h["gainers"]) == 5
+    assert all(s["market_cap"] and s["sector"] != "Other" for s in h["stocks"])
+    sp = client.get("/v1/sparklines?symbols=TCS,INFY&bars=20", headers=FREE).json()
+    assert set(sp) == {"TCS", "INFY"} and len(sp["TCS"]) == 20
+    p = client.get("/v1/market/pulse?watchlist=TCS,INFY&news=false", headers=FREE).json()["sections"]
+    assert set(p) == {"indices", "watchlist", "movers"} and len(p["indices"]["data"]) == 5
+    assert "general_news" in client.get("/v1/market/pulse", headers=FREE).json()["sections"]
+    cmp_ = client.post("/v1/backtest/compare", json={"symbol": "TCS", "bars": 400}, headers=ALGO).json()
+    assert len(cmp_["results"]) == 5 and cmp_["bars"] == 400 and "sharpe" in cmp_["benchmark"]
+    assert client.post("/v1/backtest/compare", json={"symbol": "TCS"}, headers=FREE).status_code == 403
+    t = client.get("/v1/fundamentals/TCS/trend?quarters=5", headers=ALGO).json()
+    assert len(t) == 5 and t[-1]["label"]
+    res = client.get("/v1/fundamentals/TCS/results", headers=ALGO).json()
+    assert res["period"] in ("QJ", "QS", "QD", "QM") and res["items"][0]["key"] == "RevenueFromOperations"
+    bs = client.get("/v1/fundamentals/TCS/results?statement=BalanceSheet&period=M12&year=2025", headers=ALGO).json()
+    assert bs["fiscal_year"] == 2025 and any(i["key"] == "Borrowings" for i in bs["items"])
+    part = client.get("/v1/derivatives/participants", headers=ALGO).json()
+    assert {r["client"] for r in part} == {"Client", "DII", "FII", "Pro"}
+    assert client.get("/v1/corporate/deals?kind=block", headers=ALGO).json()[0]["side"] in ("buy", "sell")
+    me = client.get("/v1/me", headers=ALGO).json()
+    assert me["quota"]["day_limit"] == 250_000 and me["quota"]["day_used"] >= 5
+    chain = client.get("/v1/options/chain?product=NIFTY", headers=ALGO).json()
+    assert chain["expiry"] and chain["summary"]["atm_strike"] and len(chain["rows"]) == 50
+    sh = client.get("/v1/fundamentals/TCS/shareholding", headers=ALGO).json()
+    assert abs(sum(r["value"] for r in sh) - 100) < 0.05 and sh[0]["entity"] == "Promoter"
+
+
+def test_dashboard_is_served_with_security_headers(client):
+    r = client.get("/")
+    assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+    assert "script-src 'self'" in r.headers["content-security-policy"]
+    assert r.headers["x-content-type-options"] == "nosniff"
+
+
 def test_history_capped_by_plan(client):
     r = client.get("/v1/history?symbol=TCS&bars=5000", headers=FREE).json()
     assert len(r["candles"]) == 500
@@ -55,7 +94,7 @@ def test_history_capped_by_plan(client):
 
 def test_screener_and_backtest(client):
     r = client.post("/v1/screener", json={"preset": "momentum"}, headers=ALGO)
-    assert r.status_code == 200 and r.json()["universe_size"] == 20
+    assert r.status_code == 200 and r.json()["universe_size"] == 50
     assert client.post("/v1/screener", json={"preset": "nope"}, headers=ALGO).status_code == 400
     r = client.post("/v1/backtest", json={"symbol": "INFY", "strategy": "breakout", "include_equity": False}, headers=ALGO)
     assert r.status_code == 200 and "equity" not in r.json()

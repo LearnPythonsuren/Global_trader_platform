@@ -88,8 +88,58 @@ def test_funds(hub):
 def test_company_360_isolates_failures(hub):
     r = services.company_360(hub, "TCS")
     assert all("data" in v for v in r["sections"].values())
-    bad = services.company_360(hub, "UNKNOWN")
-    assert "error" in bad["sections"]["ratios"] and "data" in bad["sections"]["quote"]
+    balance = r["sections"]["signal_balance"]["data"]
+    assert -1 <= balance["score"] <= 1 and balance["bullish"] + balance["bearish"] + balance["neutral"] == \
+        len(r["sections"]["signals"]["data"])
+
+    class NoFundamentals:
+        def __getattr__(self, name):
+            def fail(*a, **k):
+                raise RuntimeError("fundamental data is not part of this subscription")
+            return fail
+
+    partial = DataHub(price=hub.price, fundamentals=NoFundamentals(), mutual_funds=hub.mutual_funds,
+                      news=hub.news, demo=True)
+    bad = services.company_360(partial, "TCS")["sections"]
+    assert "error" in bad["ratios"] and "error" in bad["shareholding"]
+    assert "data" in bad["quote"] and "data" in bad["news"] and "data" in bad["signals"]
+
+
+def test_signal_balance():
+    b = services.signal_balance([{"tone": "bullish"}, {"tone": "bullish"}, {"tone": "bearish"}, {"tone": "neutral"}])
+    assert b == {"bullish": 2, "bearish": 1, "neutral": 1, "score": 0.333, "label": "mixed"}
+    assert services.signal_balance([])["label"] == "no clear signals"
+
+
+def test_heatmap_sparklines_and_trend(hub):
+    h = services.market_heatmap(hub, ["TCS", "INFY", "HDFCBANK", "BOGUS"])
+    assert {s["symbol"] for s in h["stocks"]} == {"TCS", "INFY", "HDFCBANK"} and h["missing"] == ["BOGUS"]
+    it = next(s for s in h["sectors"] if s["sector"] == "Information Technology")
+    assert it["stocks"] == 2 and it["advancers"] + it["decliners"] <= 2
+    assert sum(h["breadth"].values()) == 3
+    sp = services.sparklines(hub, ["TCS", "BOGUS"], bars=30)
+    assert list(sp) == ["TCS"] and len(sp["TCS"]) == 30
+    trend = services.financial_trend(hub, "TCS", quarters=4)
+    assert len(trend) == 4 and all(t["revenue"] > t["net_profit"] > 0 for t in trend)
+    assert [t["period"] for t in trend] == [q for _, q in services.recent_quarters(__import__("time").time(), 4)][::-1]
+
+
+def test_recent_quarters():
+    import calendar
+    nov = calendar.timegm((2026, 11, 10, 6, 0, 0))
+    assert services.recent_quarters(nov, 3) == [(2026, "QS"), (2026, "QJ"), (2025, "QM")]
+    feb = calendar.timegm((2026, 2, 10, 6, 0, 0))
+    assert services.recent_quarters(feb, 2) == [(2025, "QD"), (2025, "QS")]
+    apr = calendar.timegm((2026, 4, 2, 6, 0, 0))
+    assert services.recent_quarters(apr, 1) == [(2025, "QM")]
+
+
+def test_backtest_compare(hub):
+    out = backtest.compare(hub.price.history("NSE", "INFY", max_bars=500))
+    names = [r["strategy"] for r in out["results"]]
+    assert set(names) == set(backtest.STRATEGIES) - {"buy_hold"} and out["benchmark"]["total_return_pct"] is not None
+    returns = [r["metrics"]["total_return_pct"] for r in out["results"]]
+    assert returns == sorted(returns, reverse=True)
 
 
 def test_option_chain_summary():
@@ -97,3 +147,6 @@ def test_option_chain_summary():
             {"strike": 110, "option_type": "CE", "open_interest": 40}, {"strike": 90, "option_type": "PE", "open_interest": 20}]
     s = services.option_chain_summary(rows)
     assert s["pcr_oi"] == 1.0 and s["max_pain"] == 100 and s["resistance"][0] == 110
+    priced = [{"strike": k, "option_type": t, "open_interest": 1, "ltp": p} for k, t, p in
+              ((90, "CE", 12), (90, "PE", 1), (100, "CE", 4), (100, "PE", 3.5), (110, "CE", 1), (110, "PE", 11))]
+    assert services.option_chain_summary(priced)["atm_strike"] == 100

@@ -21,12 +21,18 @@ __all__ = [
 
 # Seconds to cache each method's result. Caching cuts the calls you make to
 # GDF, which matters when many of your customers ask for the same data.
+def _history_ttl(args: tuple, kwargs: dict) -> float:
+    """Intraday bars change every minute; daily and longer bars can be cached for a minute."""
+    periodicity = str(kwargs.get("periodicity", args[2] if len(args) > 2 else "DAY")).upper()
+    return 5 if periodicity in ("TICK", "MINUTE", "HOUR") else 60
+
+
 TTL = {
-    "last_quote": 2, "last_quotes": 2, "history": 60, "option_chain": 3, "top_gainers_losers": 15,
+    "last_quote": 2, "last_quotes": 2, "history": _history_ttl, "option_chain": 3, "top_gainers_losers": 15,
     "search_instruments": 3600, "exchanges": 86400,
     "company": 86400, "ratios": 6 * 3600, "sector": 86400, "shareholding": 86400,
     "financial_results": 6 * 3600, "announcements": 300, "corporate_actions": 3600,
-    "results_calendar": 3600, "bulk_deals": 3600, "block_deals": 3600, "fii_dii": 3600,
+    "results_calendar": 3600, "bulk_deals": 3600, "block_deals": 3600, "participants": 3600,
     "amcs": 86400, "schemes": 86400, "categories": 86400, "nav": 3600, "nav_on": 86400,
     "aum": 3600, "holdings": 86400, "holdings_what_changed": 86400, "new_fund_offers": 3600,
     "company_news": 60, "multi_company_news": 60, "general_news": 60,
@@ -36,7 +42,7 @@ TTL = {
 class Cached:
     """Wraps a provider and memoises its methods for the TTLs above."""
 
-    def __init__(self, inner: Any, ttl: dict[str, float] | None = None, max_entries: int = 20_000):
+    def __init__(self, inner: Any, ttl: dict[str, Any] | None = None, max_entries: int = 20_000):
         self._inner = inner
         self._ttl = TTL if ttl is None else ttl
         self._store: dict[tuple, tuple[float, Any]] = {}
@@ -61,12 +67,13 @@ class Cached:
                 if hit and hit[0] > now:
                     return hit[1]
             value = attr(*args, **kwargs)
+            lifetime = ttl(args, kwargs) if callable(ttl) else ttl
             with self._lock:
                 if len(self._store) >= self._max:
                     self._store = {k: v for k, v in self._store.items() if v[0] > now}
                     if len(self._store) >= self._max:
                         self._store.clear()
-                self._store[key] = (now + ttl, value)
+                self._store[key] = (now + lifetime, value)
             return value
 
         return wrapper

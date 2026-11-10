@@ -7,11 +7,17 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Fifty liquid NSE large caps. Replace with your own list through GTP_UNIVERSE_CSV.
 DEFAULT_UNIVERSE = [
-    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "ITC",
-    "SBIN", "BHARTIARTL", "KOTAKBANK", "LT", "AXISBANK", "ASIANPAINT", "MARUTI",
-    "SUNPHARMA", "TITAN", "BAJFINANCE", "WIPRO", "ULTRACEMCO", "TATAMOTORS",
+    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK",
+    "LT", "AXISBANK", "ASIANPAINT", "MARUTI", "SUNPHARMA", "TITAN", "BAJFINANCE", "WIPRO", "ULTRACEMCO", "TATAMOTORS",
+    "NTPC", "POWERGRID", "ONGC", "COALINDIA", "BPCL", "BAJAJFINSV", "HCLTECH", "TECHM", "LTIM", "NESTLEIND",
+    "BRITANNIA", "TATACONSUM", "DRREDDY", "CIPLA", "DIVISLAB", "APOLLOHOSP", "TATASTEEL", "JSWSTEEL", "HINDALCO",
+    "ADANIENT", "ADANIPORTS", "GRASIM", "HEROMOTOCO", "EICHERMOT", "BAJAJ-AUTO", "INDUSINDBK", "SBILIFE", "HDFCLIFE",
+    "TRENT", "BEL",
 ]
+DEFAULT_INDICES = ["NIFTY 50", "NIFTY BANK"]
+DEMO_INDICES = ["NIFTY 50", "NIFTY BANK", "NIFTY IT", "NIFTY MIDCAP 100", "INDIA VIX"]
 
 
 def _load_dotenv(path: Path) -> None:
@@ -52,9 +58,18 @@ class Settings:
     admin_token: str = ""
     db_path: str = "gtp.db"
     universe: list[str] = field(default_factory=lambda: list(DEFAULT_UNIVERSE))
+    #: Index symbols shown in the market tape. None means "pick the default for the mode".
+    indices: list[str] | None = None
+    index_exchange: str = "NSE_IDX"
+    price_exchange: str = "NSE"
+    fundamental_exchange: str = "BSE"
 
     http_timeout: float = 15.0
     diagnostic_retries: int = 5
+
+    def __post_init__(self) -> None:
+        if self.indices is None:
+            self.indices = list(DEMO_INDICES if self.demo else DEFAULT_INDICES)
 
     @property
     def demo(self) -> bool:
@@ -80,4 +95,8 @@ class Settings:
             # Vercel's filesystem is read-only except /tmp (and /tmp is per-instance, not durable).
             db_path=e("GTP_DB_PATH", "/tmp/gtp.db" if e("VERCEL") else "gtp.db"),
             universe=_universe_from_csv(universe_csv) if universe_csv else list(DEFAULT_UNIVERSE),
+            indices=[i.strip() for i in e("GTP_INDICES", "").split(",") if i.strip()] or None,
+            index_exchange=e("GTP_INDEX_EXCHANGE", "NSE_IDX"),
+            price_exchange=e("GTP_PRICE_EXCHANGE", "NSE"),
+            fundamental_exchange=e("GTP_FUNDAMENTAL_EXCHANGE", "BSE"),
         )

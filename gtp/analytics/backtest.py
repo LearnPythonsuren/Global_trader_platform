@@ -176,6 +176,21 @@ def run(
     return BacktestResult(strategy, p, metrics, benchmark, curve, trades)
 
 
+def compare(candles: Sequence[dict], *, initial_capital: float = 100_000.0, cost_bps: float = 10.0,
+            periods_per_year: int = 252) -> dict:
+    """Run every built-in strategy with its default parameters on the same bars and rank them."""
+    rows, benchmark = [], None
+    for name in STRATEGIES:
+        result = run(candles, name, initial_capital=initial_capital, cost_bps=cost_bps,
+                     periods_per_year=periods_per_year)
+        if name == "buy_hold":
+            benchmark = result.metrics
+            continue
+        rows.append({"strategy": name, "params": result.params, "metrics": result.metrics})
+    rows.sort(key=lambda r: r["metrics"]["total_return_pct"], reverse=True)
+    return {"benchmark": benchmark, "results": rows}
+
+
 def _close(t: Trade, bar: dict, price: float) -> None:
     t.exit_time, t.exit_price = bar["t"], price
     t.return_pct = _trade_ret(t, price)

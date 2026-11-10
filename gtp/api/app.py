@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import mimetypes
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -32,6 +33,23 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 DAY = 86400
 DEMO_KEYS = {"free": "demo-free-key", "pro": "demo-pro-key", "algo": "demo-algo-key"}
 
+# Windows takes MIME types from the registry, where .js is sometimes text/plain. Browsers refuse to
+# run JavaScript modules served that way, so the types the dashboard needs are set explicitly.
+for _type, _ext in (("text/javascript", ".js"), ("text/css", ".css"), ("image/svg+xml", ".svg"),
+                    ("font/woff2", ".woff2"), ("application/json", ".json")):
+    mimetypes.add_type(_type, _ext)
+
+# The dashboard runs only its own scripts and talks only to this server.
+PAGE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+
 PRICE_FUNCTIONS = frozenset({
     "GetLastQuote", "GetLastQuoteShort", "GetLastQuoteShortWithClose", "GetLastQuoteArray",
     "GetLastQuoteArrayShort", "GetLastQuoteArrayShortWithClose", "GetSnapshot", "GetHistory",
@@ -48,6 +66,21 @@ RAW_APIS = {
     "mf": ("mutual_funds", mfmod.FUNCTIONS),
     "news": ("news", frozenset({"api/news", "api/news/multi", "api/general/news"})),
 }
+
+
+class Assets(StaticFiles):
+    """Dashboard files. Browsers revalidate on every load, so a new deploy shows at once."""
+
+    async def get_response(self, path: str, scope: Any) -> Any:
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 304):
+            if path.endswith(".woff2"):
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            else:
+                response.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
+                response.headers["Vercel-CDN-Cache-Control"] = "public, max-age=86400"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
 
 class NewsBroker:
@@ -89,6 +122,11 @@ def _limit_symbols(customer: Customer, symbols: list[str]) -> list[str]:
     return symbols
 
 
+def _periods_per_year(periodicity: str, period: int) -> int:
+    return {"MINUTE": 252 * 375 // period, "HOUR": 252 * 6 // period, "DAY": 252 // period,
+            "WEEK": 52 // period, "MONTH": 12 // period}[periodicity] or 1
+
+
 # -- request bodies -----------------------------------------------------------
 class Filter(BaseModel):
     field: str
@@ -106,16 +144,19 @@ class ScreenRequest(BaseModel):
     fundamental_exchange: str = "BSE"
 
 
-class BacktestRequest(BaseModel):
+class BacktestBase(BaseModel):
     exchange: str = "NSE"
     symbol: str
-    strategy: str = "sma_cross"
-    params: dict[str, Any] = {}
     periodicity: Literal["MINUTE", "HOUR", "DAY", "WEEK", "MONTH"] = "DAY"
     period: int = Field(1, ge=1)
     bars: int = Field(1000, ge=30)
     cost_bps: float = Field(10.0, ge=0, le=500)
     initial_capital: float = Field(100_000.0, gt=0)
+
+
+class BacktestRequest(BacktestBase):
+    strategy: str = "sma_cross"
+    params: dict[str, Any] = {}
     include_equity: bool = True
 
 
@@ -144,8 +185,8 @@ def create_app(settings: Settings | None = None, hub: DataHub | None = None, sto
         version=__version__,
         description=(
             "Market intelligence for traders and algo developers: live and historical prices, fundamentals, "
-            "mutual funds and sentiment-tagged news from Global Datafeeds, plus Company 360, a screener, "
-            "option-chain analytics and backtesting. Authenticate with the `X-API-Key` header."
+            "mutual funds and sentiment-tagged news from Global Datafeeds, plus Company 360, a market map, "
+            "a screener, option-chain analytics and backtesting. Authenticate with the `X-API-Key` header."
         ),
         lifespan=lifespan,
     )
@@ -161,7 +202,7 @@ def create_app(settings: Settings | None = None, hub: DataHub | None = None, sto
     _register_errors(app)
     _routes(app)
     if WEB_DIR.is_dir():
-        app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+        app.mount("/static", Assets(directory=WEB_DIR), name="static")
     return app
 
 
@@ -194,12 +235,31 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes reads b
     # -- public --------------------------------------------------------------
     @app.get("/", include_in_schema=False)
     def index():
-        return FileResponse(WEB_DIR / "index.html")
+        return FileResponse(WEB_DIR / "index.html", headers=PAGE_HEADERS)
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon():
+        return FileResponse(WEB_DIR / "favicon.svg", media_type="image/svg+xml",
+                            headers={"Cache-Control": "public, max-age=86400"})
 
     @app.get("/health", tags=["platform"])
     def health():
         return {"status": "ok", "version": __version__, "mode": "demo" if settings.demo else "live",
                 "stream_subscribers": app.state.broker.subscribers}
+
+    @app.get("/v1/meta", tags=["platform"])
+    def meta():
+        """What a client needs to set itself up: mode, default symbols and the exchange session."""
+        return {
+            "name": "Global Trader Platform", "version": __version__, "mode": "demo" if settings.demo else "live",
+            "demo_key": DEMO_KEYS["algo"] if settings.demo else None,
+            "indices": settings.indices, "index_exchange": settings.index_exchange,
+            "price_exchange": settings.price_exchange, "fundamental_exchange": settings.fundamental_exchange,
+            "universe": settings.universe,
+            "session": {"timezone": "Asia/Kolkata", "utc_offset_minutes": 330, "open": "09:15", "close": "15:30",
+                        "weekdays": [1, 2, 3, 4, 5]},
+            "server_time": int(time.time()),
+        }
 
     @app.get("/v1/plans", tags=["platform"])
     def plans():
@@ -208,7 +268,8 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes reads b
     @app.get("/v1/me", tags=["platform"])
     def me(customer: Customer = Depends(current_customer)):
         return {"customer": customer.to_dict(), "plan": next(p for p in P.public_catalog() if p["id"] == customer.plan.id),
-                "usage_30d": app.state.store.usage(customer.id), "demo_data": hub().demo}
+                "quota": app.state.store.quota(customer), "usage_30d": app.state.store.usage(customer.id),
+                "demo_data": hub().demo}
 
     # -- prices ----------------------------------------------------------------
     @app.get("/v1/quote", tags=["prices"])
@@ -239,21 +300,43 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes reads b
             out["indicators"] = ta.compute(candles, _split_specs(indicators))
         return out
 
+    @app.get("/v1/sparklines", tags=["prices"])
+    def sparklines(symbols: str = Query(..., description="Comma-separated"), exchange: str = "NSE",
+                   bars: int = Query(30, ge=5, le=120), customer: Customer = Depends(require(P.HISTORY))):
+        """Recent daily closes for several symbols in one call, for small trend charts."""
+        return services.sparklines(hub(), _limit_symbols(customer, _csv(symbols)), exchange=exchange, bars=bars)
+
     @app.get("/v1/technicals", tags=["prices"])
     def technicals(symbol: str, exchange: str = "NSE", _: Customer = Depends(require(P.HISTORY))):
         return {"symbol": symbol.upper(), **ta.snapshot(hub().price.history(exchange, symbol.upper(), "DAY", max_bars=300))}
 
+    @app.get("/v1/market/pulse", tags=["market"])
+    def pulse(watchlist: Optional[str] = None, news: bool = Query(True, description="Include news sections"),
+              customer: Customer = Depends(require(P.QUOTES))):
+        """Index quotes, your watchlist and (optionally) market news in one call."""
+        wl = _limit_symbols(customer, _csv(watchlist)) if watchlist else None
+        return services.market_pulse(hub(), index_exchange=settings.index_exchange, indices=settings.indices,
+                                     equity_exchange=settings.price_exchange, watchlist=wl, include_news=news)
+
+    @app.get("/v1/market/heatmap", tags=["market"])
+    def heatmap(_: Customer = Depends(require(P.QUOTES))):
+        """Day change, sector and market value of every stock in the universe, with sector and breadth totals."""
+        return services.market_heatmap(hub(), settings.universe, price_exchange=settings.price_exchange,
+                                       fundamental_exchange=settings.fundamental_exchange)
+
+    # -- derivatives -------------------------------------------------------------
     @app.get("/v1/options/chain", tags=["derivatives"])
     def option_chain(product: str, exchange: str = "NFO", expiry: Optional[str] = None,
                      _: Customer = Depends(require(P.OPTIONS))):
         rows = hub().price.option_chain(exchange, product.upper(), expiry)
-        return {"product": product.upper(), "expiry": expiry, "summary": services.option_chain_summary(rows),
-                "rows": rows}
+        expiries = sorted({r["expiry"] for r in rows if r.get("expiry")})
+        return {"product": product.upper(), "expiry": expiry or (expiries[0] if len(expiries) == 1 else None),
+                "expiries": expiries, "summary": services.option_chain_summary(rows), "rows": rows}
 
-    @app.get("/v1/market/pulse", tags=["prices"])
-    def pulse(watchlist: Optional[str] = None, customer: Customer = Depends(require(P.QUOTES))):
-        wl = _limit_symbols(customer, _csv(watchlist)) if watchlist else None
-        return services.market_pulse(hub(), watchlist=wl)
+    @app.get("/v1/derivatives/participants", tags=["derivatives"])
+    def participants(exchange: str = "NSE", _: Customer = Depends(require(P.OPTIONS))):
+        """Open interest in index and stock derivatives by participant type (FII, DII, Pro, Client)."""
+        return hub().fundamentals.participants(exchange)
 
     # -- fundamentals ---------------------------------------------------------------
     @app.get("/v1/fundamentals/{symbol}", tags=["fundamentals"])
@@ -264,13 +347,25 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes reads b
                 "sector": hub().fundamentals.sector(exchange, s), "profile": hub().fundamentals.company(exchange, s)}
 
     @app.get("/v1/fundamentals/{symbol}/results", tags=["fundamentals"])
-    def results(symbol: str, year: int = Query(default_factory=lambda: time.gmtime().tm_year), exchange: str = "BSE",
+    def results(symbol: str, year: Optional[int] = Query(None, description="Fiscal year: 2026 means FY 2026-27"),
+                exchange: str = "BSE",
                 statement: Literal["ProfitLoss", "BalanceSheet", "CashFlow"] = "ProfitLoss",
-                period: Literal["QJ", "QS", "QD", "QM", "M6", "M9", "M12"] = "QD",
+                period: Optional[Literal["QJ", "QS", "QD", "QM", "M6", "M9", "M12"]] = None,
                 nature: Literal["Standalone", "Consolidated"] = "Standalone",
                 _: Customer = Depends(require(P.FUNDAMENTALS))):
-        return hub().fundamentals.financial_results(exchange, symbol.upper(), year, statement=statement,
-                                                    period=period, nature=nature)
+        """Reported line items of one statement. Defaults to the latest completed quarter."""
+        latest_year, latest_period = services.recent_quarters(time.time(), 1)[0]
+        year, period = year or latest_year, period or latest_period
+        return {"symbol": symbol.upper(), "fiscal_year": year, "period": period, "statement": statement, "nature": nature,
+                "items": hub().fundamentals.financial_results(exchange, symbol.upper(), year, statement=statement,
+                                                              period=period, nature=nature)}
+
+    @app.get("/v1/fundamentals/{symbol}/trend", tags=["fundamentals"])
+    def trend(symbol: str, quarters: int = Query(6, ge=2, le=12), exchange: str = "BSE",
+              nature: Literal["Standalone", "Consolidated"] = "Standalone",
+              _: Customer = Depends(require(P.FUNDAMENTALS))):
+        """Revenue, net profit and EPS for the last few reported quarters."""
+        return services.financial_trend(hub(), symbol, exchange=exchange, quarters=quarters, nature=nature)
 
     @app.get("/v1/fundamentals/{symbol}/shareholding", tags=["fundamentals"])
     def shareholding(symbol: str, exchange: str = "BSE", kind: str = "SummaryAll",
@@ -290,9 +385,15 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes reads b
         return hub().fundamentals.corporate_actions(exchange, symbol.upper() if symbol else None, now - days * DAY, now)
 
     @app.get("/v1/corporate/results-calendar", tags=["fundamentals"])
-    def results_calendar(exchange: str = "BSE", range: str = "Next7Days", symbols: Optional[str] = None,  # noqa: A002
+    def results_calendar(exchange: str = "BSE", range: str = "Next7days", symbols: Optional[str] = None,  # noqa: A002
                          _: Customer = Depends(require(P.FUNDAMENTALS))):
         return hub().fundamentals.results_calendar(exchange, range, _csv(symbols) or None)
+
+    @app.get("/v1/corporate/deals", tags=["fundamentals"])
+    def deals(kind: Literal["bulk", "block"] = "bulk", exchange: str = "BSE", range: str = "Previous7days",  # noqa: A002
+              symbol: Optional[str] = None, _: Customer = Depends(require(P.FUNDAMENTALS))):
+        fetch = hub().fundamentals.bulk_deals if kind == "bulk" else hub().fundamentals.block_deals
+        return fetch(exchange, range, symbol.upper() if symbol else None)
 
     @app.get("/v1/company/{symbol}", tags=["intelligence"])
     def company(symbol: str, price_exchange: str = "NSE", fundamental_exchange: str = "BSE",
@@ -303,7 +404,8 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes reads b
     # -- screener & backtest ------------------------------------------------------------
     @app.get("/v1/screener/presets", tags=["intelligence"])
     def screener_presets():
-        return {"presets": screener.PRESETS, "fields": screener.FIELDS, "operators": list(screener.OPS)}
+        return {"presets": screener.PRESETS, "fields": screener.FIELDS, "operators": list(screener.OPS),
+                "universe_size": len(settings.universe)}
 
     @app.post("/v1/screener", tags=["intelligence"])
     def run_screen(req: ScreenRequest, customer: Customer = Depends(require(P.SCREENER))):
@@ -326,16 +428,25 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes reads b
     def strategies():
         return {name: {"defaults": d} for name, (_, d) in bt.STRATEGIES.items()}
 
+    def _backtest_candles(req: BacktestBase, customer: Customer) -> list[dict]:
+        bars = min(req.bars, customer.plan.history_max_bars)
+        return hub().price.history(req.exchange, req.symbol.upper(), req.periodicity, req.period, max_bars=bars)
+
     @app.post("/v1/backtest", tags=["intelligence"])
     def backtest(req: BacktestRequest, customer: Customer = Depends(require(P.BACKTEST))):
-        bars = min(req.bars, customer.plan.history_max_bars)
-        candles = hub().price.history(req.exchange, req.symbol.upper(), req.periodicity, req.period, max_bars=bars)
-        ppy = {"MINUTE": 252 * 375 // req.period, "HOUR": 252 * 6 // req.period, "DAY": 252 // req.period,
-               "WEEK": 52 // req.period, "MONTH": 12 // req.period}[req.periodicity] or 1
+        candles = _backtest_candles(req, customer)
         result = bt.run(candles, req.strategy, req.params, initial_capital=req.initial_capital,
-                        cost_bps=req.cost_bps, periods_per_year=ppy)
+                        cost_bps=req.cost_bps, periods_per_year=_periods_per_year(req.periodicity, req.period))
         return {"symbol": req.symbol.upper(), "exchange": req.exchange, "bars": len(candles),
                 **result.to_dict(include_equity=req.include_equity)}
+
+    @app.post("/v1/backtest/compare", tags=["intelligence"])
+    def backtest_compare(req: BacktestBase, customer: Customer = Depends(require(P.BACKTEST))):
+        """Run every built-in strategy on the same bars and rank them against buy and hold."""
+        candles = _backtest_candles(req, customer)
+        return {"symbol": req.symbol.upper(), "exchange": req.exchange, "bars": len(candles),
+                **bt.compare(candles, initial_capital=req.initial_capital, cost_bps=req.cost_bps,
+                             periods_per_year=_periods_per_year(req.periodicity, req.period))}
 
     # -- news ---------------------------------------------------------------------------
     @app.get("/v1/news", tags=["news"])
@@ -363,25 +474,25 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes reads b
         wanted = set(_csv(symbols))
         broker: NewsBroker = app.state.broker
         q = broker.subscribe()
-        demo = hub().demo
+        fresh = getattr(hub().news, "fresh", None)        # demo mode writes its own articles
 
         async def gen():
             try:
+                yield "retry: 3000\n\n"
                 for a in reversed(app.state.store.recent_articles(sorted(wanted) or None, limit=10)):
                     yield f"event: article\ndata: {json.dumps(a)}\n\n"
+                last_id = None
                 while True:
                     if await request.is_disconnected():
                         break
                     try:
-                        a = await asyncio.wait_for(q.get(), timeout=15)
+                        a = await asyncio.wait_for(q.get(), timeout=10)
                     except asyncio.TimeoutError:
-                        if demo:
-                            sym = sorted(wanted)[int(time.time()) % len(wanted)] if wanted else "RELIANCE"
-                            a = hub().news.company_news(sym, limit=1)[0] | {"date": time.strftime(
-                                "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}
-                        else:
+                        a = fresh(sorted(wanted)) if fresh else None
+                        if a is None or a["article_id"] == last_id:
                             yield ": keep-alive\n\n"
                             continue
+                        last_id = a["article_id"]
                     if not wanted or (a.get("symbol") or "").upper() in wanted:
                         yield f"event: article\ndata: {json.dumps(a)}\n\n"
             finally:

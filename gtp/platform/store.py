@@ -196,6 +196,18 @@ class Store:
         return {"minute_remaining": plan.requests_per_minute - len(window),
                 "day_remaining": plan.requests_per_day - used_today - 1}
 
+    def quota(self, customer: Customer, *, now: float | None = None) -> dict:
+        """How much of the per-minute and per-day allowance is used, without recording a request."""
+        now = now or time.time()
+        day = time.strftime("%Y-%m-%d", time.gmtime(now))
+        with self._lock:
+            window = self._minute.get(customer.id, ())
+            minute_used = sum(1 for t in window if t > now - 60)
+            row = self._db.execute("SELECT COALESCE(SUM(count),0) FROM usage WHERE customer_id=? AND day=?",
+                                   (customer.id, day)).fetchone()
+        return {"minute_limit": customer.plan.requests_per_minute, "minute_used": minute_used,
+                "day_limit": customer.plan.requests_per_day, "day_used": int(row[0])}
+
     def usage(self, customer_id: int, days: int = 30) -> list[dict]:
         since = time.strftime("%Y-%m-%d", time.gmtime(time.time() - days * 86400))
         with self._lock:

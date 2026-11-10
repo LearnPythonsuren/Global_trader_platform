@@ -23,9 +23,9 @@ OPS = {
 FUNDAMENTAL_FIELDS = ("pe", "pb", "eps", "market_cap", "book_value", "dividend_yield", "debt",
                       "interest_coverage", "price_sales", "enterprise_value", "profit_after_tax")
 TECHNICAL_FIELDS = ("close", "rsi14", "sma50", "sma200", "above_sma200", "trend", "change_1w_pct",
-                    "change_1m_pct", "change_3m_pct", "change_1y_pct", "pct_from_52w_high",
-                    "volatility_1y_pct", "atr14")
-OTHER_FIELDS = ("symbol", "sector", "industry", "company")
+                    "change_1m_pct", "change_3m_pct", "change_1y_pct", "pct_from_52w_high", "pct_from_52w_low",
+                    "macd_hist", "volume_ratio", "volatility_1y_pct", "atr14")
+OTHER_FIELDS = ("symbol", "name", "sector", "industry")
 FIELDS = FUNDAMENTAL_FIELDS + TECHNICAL_FIELDS + OTHER_FIELDS
 
 PRESETS: dict[str, dict[str, Any]] = {
@@ -51,6 +51,17 @@ PRESETS: dict[str, dict[str, Any]] = {
         "filters": [{"field": "pct_from_52w_high", "op": ">=", "value": -5}],
         "sort": "-pct_from_52w_high",
     },
+    "volume_breakout": {
+        "description": "Unusual volume with the price rising this week",
+        "filters": [{"field": "volume_ratio", "op": ">=", "value": 1.5},
+                    {"field": "change_1w_pct", "op": ">", "value": 0}],
+        "sort": "-volume_ratio",
+    },
+    "dividend": {
+        "description": "Dividend yield of 2% or more",
+        "filters": [{"field": "dividend_yield", "op": ">=", "value": 2}],
+        "sort": "-dividend_yield",
+    },
 }
 
 
@@ -69,8 +80,9 @@ def build_row(hub: Any, symbol: str, price_exchange: str = "NSE", fundamental_ex
         row["errors"].append(f"fundamentals: {e}")
     try:
         sec = hub.fundamentals.sector(fundamental_exchange, symbol)
-        row["sector"] = sec.get("Sector")
-        row["industry"] = sec.get("Industry")
+        row["name"] = sec.get("name")
+        row["sector"] = sec.get("sector")
+        row["industry"] = sec.get("industry")
     except Exception as e:  # noqa: BLE001
         row["errors"].append(f"sector: {e}")
     return row
