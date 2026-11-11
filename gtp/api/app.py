@@ -291,6 +291,11 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes reads b
     def index():
         return FileResponse(WEB_DIR / "index.html", headers=PAGE_HEADERS)
 
+    @app.get("/admin", include_in_schema=False)
+    def admin_page():
+        # Static console; every action it performs is gated by the admin token at the API.
+        return FileResponse(WEB_DIR / "admin.html", headers=PAGE_HEADERS)
+
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon():
         return FileResponse(WEB_DIR / "favicon.svg", media_type="image/svg+xml",

@@ -89,6 +89,15 @@ def test_dashboard_is_served_with_security_headers(client):
     assert r.headers["x-content-type-options"] == "nosniff"
 
 
+def test_admin_page_and_assets_served(client):
+    r = client.get("/admin")
+    assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+    assert "script-src 'self'" in r.headers["content-security-policy"]
+    # The console logic must be an external module (CSP forbids inline scripts).
+    assert '/static/admin.js' in r.text and 'noindex' in r.text
+    assert client.get("/static/admin.js").status_code == 200
+
+
 def test_history_capped_by_plan(client):
     r = client.get("/v1/history?symbol=TCS&bars=5000", headers=FREE).json()
     assert len(r["candles"]) == 500
