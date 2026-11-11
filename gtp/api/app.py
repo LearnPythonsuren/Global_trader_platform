@@ -240,6 +240,10 @@ def create_app(settings: Settings | None = None, hub: DataHub | None = None, sto
     if settings.demo and not app.state.store.list_customers():
         for plan_id, key in DEMO_KEYS.items():
             app.state.store.create_customer(f"Demo {plan_id}", "demo@example.com", plan_id, api_key=key)
+    if settings.bootstrap_key and app.state.store.customer_by_key(settings.bootstrap_key) is None:
+        # A durable owner key, so live mode has a working key despite the ephemeral serverless DB.
+        app.state.store.create_customer("Owner", "owner@globaltrader.local", settings.bootstrap_plan,
+                                        api_key=settings.bootstrap_key)
 
     _register_errors(app)
     _routes(app)

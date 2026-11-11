@@ -194,3 +194,14 @@ def test_security_headers_on_every_response(client):
     # present on the dashboard page too, alongside its CSP
     page = client.get('/').headers
     assert page['x-frame-options'] == 'DENY' and 'content-security-policy' in page
+
+
+def test_bootstrap_owner_key_in_live_mode(tmp_path):
+    # Live mode seeds no demo keys, but a configured bootstrap key must work (survives the ephemeral DB).
+    s = Settings(mode="live", db_path=str(tmp_path / "live.db"), bootstrap_key="owner-xyz",
+                 bootstrap_plan="algo", price_base_url="http://x", price_access_key="k")
+    with TestClient(create_app(s)) as c:
+        assert c.get("/v1/quote?symbol=TCS", headers={"X-API-Key": "demo-algo-key"}).status_code == 401
+        me = c.get("/v1/me", headers={"X-API-Key": "owner-xyz"})
+        assert me.status_code == 200 and me.json()["customer"]["plan"] == "algo"
+        assert c.get("/v1/meta").json()["demo_key"] is None

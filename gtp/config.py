@@ -58,6 +58,10 @@ class Settings:
 
     webhook_secret: str = ""
     admin_token: str = ""
+    # A known owner API key seeded at startup, so the app has a working key even on a
+    # serverless host whose database is ephemeral (re-seeded every cold start).
+    bootstrap_key: str = ""
+    bootstrap_plan: str = "algo"
     db_path: str = "gtp.db"
     universe: list[str] = field(default_factory=lambda: list(DEFAULT_UNIVERSE))
     #: Index symbols shown in the market tape. None means "pick the default for the mode".
@@ -101,6 +105,8 @@ class Settings:
             news_api_key=e("GDF_NEWS_API_KEY", ""),
             webhook_secret=e("GTP_WEBHOOK_SECRET", ""),
             admin_token=e("GTP_ADMIN_TOKEN", ""),
+            bootstrap_key=e("GTP_BOOTSTRAP_KEY", ""),
+            bootstrap_plan=e("GTP_BOOTSTRAP_PLAN", "algo"),
             # Vercel's filesystem is read-only except /tmp (and /tmp is per-instance, not durable).
             db_path=e("GTP_DB_PATH", "/tmp/gtp.db" if e("VERCEL") else "gtp.db"),
             universe=_universe_from_csv(universe_csv) if universe_csv else list(DEFAULT_UNIVERSE),
