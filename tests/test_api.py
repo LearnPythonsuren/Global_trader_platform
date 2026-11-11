@@ -41,11 +41,13 @@ def test_core_endpoints(client):
     for path in ["/v1/history?symbol=TCS&bars=60&indicators=sma:20,macd:12,26,9", "/v1/technicals?symbol=TCS",
                  "/v1/fundamentals/TCS", "/v1/options/chain?product=NIFTY", "/v1/market/pulse?watchlist=TCS,INFY",
                  "/v1/news?symbol=TCS", "/v1/news/general", "/v1/mf/122639/returns", "/v1/mf/overlap?a=122639&b=120716",
-                 "/v1/corporate/announcements?symbol=TCS", "/v1/me"]:
+                 "/v1/mf/nav/browse?limit=5", "/v1/corporate/announcements?symbol=TCS", "/v1/me"]:
         r = client.get(path, headers=ALGO)
         assert r.status_code == 200, (path, r.text)
     h = client.get("/v1/history?symbol=TCS&bars=60&indicators=sma:20,macd:12,26,9", headers=ALGO).json()
     assert len(h["candles"]) == 60 and set(h["indicators"]) == {"sma:20", "macd:12,26,9"}
+    nav = client.get("/v1/mf/nav/browse?limit=5", headers=ALGO).json()
+    assert 1 <= len(nav) <= 5 and {"code", "nav", "date"} <= set(nav[0])
 
 
 def test_new_endpoints(client):

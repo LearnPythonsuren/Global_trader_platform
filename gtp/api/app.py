@@ -609,6 +609,11 @@ def _routes(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes reads b
             raise HTTPException(400, "Pass a scheme name fragment or a category")
         return hub().mutual_funds.schemes(name=name, category=category)[:200]
 
+    @app.get("/v1/mf/nav/browse", tags=["mutual funds"])
+    def mf_nav_browse(limit: int = 60, _: Customer = Depends(require(P.MUTUAL_FUNDS))):
+        """Live NAV board across the scheme universe (the NAV feed, no name directory needed)."""
+        return hub().mutual_funds.nav(max_rows=max(1, min(limit, 300)))
+
     @app.get("/v1/mf/nav", tags=["mutual funds"])
     def mf_nav(code: Optional[str] = None, name: Optional[str] = None, isin: Optional[str] = None,
                _: Customer = Depends(require(P.MUTUAL_FUNDS))):

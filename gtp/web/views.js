@@ -490,64 +490,103 @@ function oiBar(oi, max, color) {
 
 // ============================================================ FUNDS ==========
 export async function funds(root, ctx) {
-  root.append(viewHeader('Mutual Funds', 'Returns, portfolio holdings and overlap across schemes'));
-  const searchInput = el('input', { class: 'input', style: 'width:220px', value: 'direct', placeholder: 'scheme name' });
+  root.append(viewHeader('Mutual Funds', 'Live NAV board across the scheme universe'));
+  const searchInput = el('input', { class: 'input mono', style: 'width:220px', placeholder: 'AMFI code or ISIN' });
+  const note = el('div', { class: 'mini faint' }, '');
   const listCard = el('div', { class: 'card pad0' });
   const detail = el('div', { style: 'margin-top:14px' });
-  root.append(el('div', { class: 'card', style: 'margin-bottom:14px' }, el('div', { class: 'row', style: 'gap:8px' }, [
-    searchInput, el('button', { class: 'btn primary', onclick: search }, 'Search'),
-    el('span', { class: 'mini faint' }, 'or try a category: Equity, Debt, Hybrid'),
-  ])), listCard, detail);
+  root.append(el('div', { class: 'card', style: 'margin-bottom:14px' }, [
+    el('form', { class: 'row', style: 'gap:8px', onsubmit: (e) => { e.preventDefault(); search(); } }, [
+      searchInput, el('button', { class: 'btn primary', type: 'submit' }, 'Look up'),
+      el('button', { class: 'btn', type: 'button', onclick: browse }, 'Browse live NAVs'),
+    ]),
+    el('div', { style: 'margin-top:8px' }, note),
+  ]), listCard, detail);
 
-  async function search() {
+  function render(rows) {
+    listCard.innerHTML = '';
+    if (!rows || !rows.length) { listCard.append(el('div', { class: 'empty' }, 'No NAV rows returned.')); return; }
+    listCard.append(table([
+      { head: 'Code', cell: (s) => el('span', { class: 'mono mini muted' }, s.code) },
+      { head: 'ISIN / scheme', cell: (s) => el('span', { class: 'mono' }, s.name || '–') },
+      { head: 'Plan', cell: (s) => el('span', { class: 'row', style: 'gap:4px;flex-wrap:wrap' }, [s.isin_div_payout, s.isin_div_reinvest].filter(Boolean).map((p) => el('span', { class: 'chip mini' }, p))) },
+      { head: 'NAV', cell: (s) => el('span', { class: 'mono' }, num(s.nav, 4)) },
+      { head: 'As of', cell: (s) => el('span', { class: 'mini muted' }, (s.date || '').slice(0, 10)) },
+    ], rows.slice(0, 120), { onRow: (s) => openFund(s.code) }));
+  }
+
+  async function browse() {
+    detail.innerHTML = '';
     listCard.innerHTML = '<div class="empty"><span class="spinner"></span></div>';
     try {
-      const q = searchInput.value.trim();
-      const rows = await api(`/v1/mf/schemes?name=${enc(q)}`);
-      listCard.innerHTML = '';
-      listCard.append(table([
-        { head: 'Code', cell: (s) => el('span', { class: 'mono mini muted' }, s.Code) },
-        { head: 'Scheme', cell: (s) => el('span', {}, s.Name) },
-        { head: 'Category', cell: (s) => el('span', { class: 'chip' }, s.SubCategory || s.Category) },
-      ], rows.slice(0, 40), { onRow: (s) => openFund(s.Code) }));
+      const rows = await api('/v1/mf/nav/browse?limit=120');
+      note.textContent = `Live NAV feed · ${rows.length} schemes. Tap a row for detail. Scheme-name directory, returns history and holdings depend on those entitlements in your Global Datafeeds plan.`;
+      render(rows);
+    } catch (e) { listCard.innerHTML = ''; listCard.append(el('div', { class: 'empty down' }, e.detail || e.message)); }
+  }
+
+  async function search() {
+    const q = searchInput.value.trim();
+    if (!q) return browse();
+    detail.innerHTML = '';
+    listCard.innerHTML = '<div class="empty"><span class="spinner"></span></div>';
+    const param = /^[0-9]+$/.test(q) ? `code=${enc(q)}` : `isin=${enc(q)}`;
+    try {
+      const rows = await api(`/v1/mf/nav?${param}`);
+      note.textContent = rows.length ? `${rows.length} match(es) for ${q}.` : `No NAV found for ${q}.`;
+      render(rows);
     } catch (e) { listCard.innerHTML = ''; listCard.append(el('div', { class: 'empty down' }, e.detail || e.message)); }
   }
 
   async function openFund(code) {
     detail.innerHTML = '<div class="card"><div class="empty"><span class="spinner"></span></div></div>';
     try {
-      const [ret, hold] = await Promise.all([api(`/v1/mf/${enc(code)}/returns`), api(`/v1/mf/${enc(code)}/holdings`)]);
+      const [ret, hold] = await Promise.all([
+        api(`/v1/mf/${enc(code)}/returns`).catch((e) => ({ error: e.detail || e.message })),
+        api(`/v1/mf/${enc(code)}/holdings`).catch((e) => ({ error: e.detail || e.message, holdings: [] })),
+      ]);
       detail.innerHTML = '';
-      const retRow = el('div', { class: 'grid cols-4', style: 'margin-bottom:14px' });
-      for (const [k, v] of Object.entries(ret.returns)) {
-        if (!v) continue;
-        retRow.append(stat(k.toUpperCase(), pct(v.absolute_pct), v.cagr_pct != null ? `CAGR ${pct(v.cagr_pct)}` : 'absolute', cls(v.absolute_pct)));
+      const head = el('div', { class: 'card' }, [
+        el('h3', {}, [esc(ret.name || code), el('span', { class: 'muted mono mini' }, ret.nav != null ? ` NAV ${num(ret.nav, 4)} · ${esc((ret.date || '').slice(0, 10))}` : '')]),
+      ]);
+      const retEntries = Object.entries(ret.returns || {}).filter(([, v]) => v);
+      if (retEntries.length) {
+        const retRow = el('div', { class: 'grid cols-4', style: 'margin-top:12px' });
+        for (const [k, v] of retEntries) retRow.append(stat(k.toUpperCase(), pct(v.absolute_pct), v.cagr_pct != null ? `CAGR ${pct(v.cagr_pct)}` : 'absolute', cls(v.absolute_pct)));
+        head.append(retRow);
+      } else {
+        head.append(el('div', { class: 'mini faint', style: 'margin-top:10px' }, 'Trailing returns need NAV history, which is not included in this Global Datafeeds plan.'));
       }
-      detail.append(el('div', { class: 'card' }, [el('h3', {}, [esc(ret.name), el('span', { class: 'muted mono mini' }, ` NAV ${num(ret.nav, 4)} · ${esc(ret.date?.slice(0, 10) || '')}`)]), retRow]));
-      // exposure donut + holdings
-      const exp = hold.exposure;
-      const donutCard = el('div', { class: 'card' }, [el('h3', {}, 'Sector exposure')]);
-      const dc = el('canvas', { style: 'width:150px;height:150px;margin:0 auto;display:block' });
-      const slices = exp.by_sector.slice(0, 8).map((s, i) => ({ value: s.weight, color: palette(i), label: s.name }));
-      donutCard.append(el('div', { class: 'row', style: 'gap:16px;align-items:center;flex-wrap:wrap' }, [
-        dc, el('div', { class: 'stack', style: 'flex:1;min-width:140px' }, slices.map((s) => el('div', { class: 'row spread mini' }, [
-          el('span', { class: 'row', style: 'gap:6px' }, [el('span', { style: `width:9px;height:9px;border-radius:2px;background:${s.color}` }), s.label]),
-          el('span', { class: 'mono' }, num(s.value) + '%'),
-        ]))),
-      ]));
-      donutCard.append(el('div', { class: 'mini faint', style: 'margin-top:10px' }, `Top 10 holdings: ${num(exp.top10_weight)}% of assets`));
-      const holdCard = el('div', { class: 'card pad0 span-2' }, [el('div', { class: 'card-head', style: 'padding:14px 16px' }, el('h3', {}, 'Holdings'))]);
-      holdCard.append(table([
-        { head: 'Instrument', cell: (h) => el('span', {}, h.instrument) },
-        { head: 'Sector', cell: (h) => el('span', { class: 'mini muted' }, h.sector || h.industry || '–') },
-        { head: 'Size', cell: (h) => el('span', { class: 'chip mini' }, h.size || h.asset_type) },
-        { head: 'Weight', cell: (h) => el('span', { class: 'mono' }, num(h.weight) + '%') },
-      ], hold.holdings.slice(0, 20)));
-      detail.append(el('div', { class: 'grid cols-3' }, [holdCard, donutCard]));
-      requestAnimationFrame(() => donut(dc, slices));
+      detail.append(head);
+
+      const holdings = (hold && hold.holdings) || [];
+      if (holdings.length) {
+        const exp = hold.exposure;
+        const donutCard = el('div', { class: 'card' }, [el('h3', {}, 'Sector exposure')]);
+        const dc = el('canvas', { style: 'width:150px;height:150px;margin:0 auto;display:block' });
+        const slices = exp.by_sector.slice(0, 8).map((s, i) => ({ value: s.weight, color: palette(i), label: s.name }));
+        donutCard.append(el('div', { class: 'row', style: 'gap:16px;align-items:center;flex-wrap:wrap' }, [
+          dc, el('div', { class: 'stack', style: 'flex:1;min-width:140px' }, slices.map((s) => el('div', { class: 'row spread mini' }, [
+            el('span', { class: 'row', style: 'gap:6px' }, [el('span', { style: `width:9px;height:9px;border-radius:2px;background:${s.color}` }), s.label]),
+            el('span', { class: 'mono' }, num(s.value) + '%'),
+          ]))),
+        ]));
+        donutCard.append(el('div', { class: 'mini faint', style: 'margin-top:10px' }, `Top 10 holdings: ${num(exp.top10_weight)}% of assets`));
+        const holdCard = el('div', { class: 'card pad0 span-2' }, [el('div', { class: 'card-head', style: 'padding:14px 16px' }, el('h3', {}, 'Holdings'))]);
+        holdCard.append(table([
+          { head: 'Instrument', cell: (h) => el('span', {}, h.instrument) },
+          { head: 'Sector', cell: (h) => el('span', { class: 'mini muted' }, h.sector || h.industry || '–') },
+          { head: 'Size', cell: (h) => el('span', { class: 'chip mini' }, h.size || h.asset_type) },
+          { head: 'Weight', cell: (h) => el('span', { class: 'mono' }, num(h.weight) + '%') },
+        ], holdings.slice(0, 20)));
+        detail.append(el('div', { class: 'grid cols-3' }, [holdCard, donutCard]));
+        requestAnimationFrame(() => donut(dc, slices));
+      } else {
+        detail.append(el('div', { class: 'card' }, el('div', { class: 'empty' }, 'Portfolio holdings are not included in this Global Datafeeds plan.')));
+      }
     } catch (e) { detail.innerHTML = ''; detail.append(el('div', { class: 'card' }, el('div', { class: 'empty down' }, e.detail || e.message))); }
   }
-  search();
+  browse();
 }
 
 // ============================================================ NEWS ===========
