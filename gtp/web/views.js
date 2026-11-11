@@ -806,6 +806,7 @@ export async function account(root, ctx) {
   accountCard.append(el('div', { class: 'stack', style: 'gap:8px' }, [
     el('div', { class: 'row spread mini' }, [el('span', { class: 'muted' }, 'Mode'), el('span', { class: 'chip ' + (state.demo ? 'neu' : 'pos') }, state.demo ? 'demo data' : 'live')]),
     el('div', { class: 'row spread mini' }, [el('span', { class: 'muted' }, 'API key'), el('button', { class: 'btn ghost', style: 'height:28px', onclick: () => ctx.changeKey() }, 'Change key')]),
+    el('div', { class: 'row spread mini' }, [el('span', { class: 'muted' }, 'Admin'), el('a', { class: 'btn ghost', style: 'height:28px;display:inline-flex;align-items:center', href: '/admin', target: '_blank', rel: 'noopener' }, 'Customer keys ↗')]),
     el('div', { class: 'mini faint', style: 'margin-top:4px' }, state.demo ? 'Demo mode serves synthetic data. Switch GTP_MODE=live with your Global Datafeeds keys for real market data.' : 'Live data from Global Datafeeds.'),
   ]));
   grid.append(accountCard);
