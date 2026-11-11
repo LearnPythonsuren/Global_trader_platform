@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -77,26 +77,38 @@ class SafeFetcher:
             raise FetchNotAllowed(f"{host!r} resolves to a non-public address")
         return host
 
-    def fetch(self, url: str, *, accept: tuple[str, ...] | None = None) -> tuple[str, bytes]:
-        """Return (content_type, body) for an allowlisted URL, or raise FetchError."""
+    def fetch(self, url: str, *, accept: tuple[str, ...] | None = None, max_redirects: int = 5) -> tuple[str, bytes]:
+        """Return (content_type, body) for an allowlisted URL, or raise FetchError.
+
+        Redirects are followed (exchange filings often go through a redirecting .aspx link),
+        but every hop is re-validated against the same policy — https, host allowlist and a
+        public-address check — so a redirect can never be used to reach an internal target.
+        """
         self.check(url)
+        current = url
         try:
             with httpx.Client(timeout=self.timeout, follow_redirects=False, transport=self._transport) as client:
-                with client.stream("GET", url, headers={"User-Agent": "GlobalTraderPlatform/1.0"}) as r:
-                    if r.status_code in (301, 302, 303, 307, 308):
-                        raise FetchNotAllowed("Redirects are not followed for fetched documents")
-                    if r.status_code >= 400:
-                        raise FetchError(f"Document host returned HTTP {r.status_code}")
-                    ctype = r.headers.get("content-type", "application/octet-stream").split(";")[0].strip().lower()
-                    if accept and not any(a in ctype for a in accept):
-                        # Some exchanges mislabel PDFs as octet-stream; the caller re-checks magic bytes.
-                        if "octet-stream" not in ctype:
+                for _ in range(max_redirects + 1):
+                    with client.stream("GET", current, headers={"User-Agent": "GlobalTraderPlatform/1.0"}) as r:
+                        if r.status_code in (301, 302, 303, 307, 308):
+                            location = r.headers.get("location")
+                            if not location:
+                                raise FetchError("Redirect response without a Location")
+                            current = urljoin(current, location)
+                            self.check(current)       # re-validate the hop before following it
+                            continue
+                        if r.status_code >= 400:
+                            raise FetchError(f"Document host returned HTTP {r.status_code}")
+                        ctype = r.headers.get("content-type", "application/octet-stream").split(";")[0].strip().lower()
+                        if accept and not any(a in ctype for a in accept) and "octet-stream" not in ctype:
+                            # Some exchanges mislabel PDFs; the caller re-checks magic bytes for octet-stream.
                             raise FetchError(f"Unexpected content type {ctype!r}")
-                    buf = bytearray()
-                    for chunk in r.iter_bytes():
-                        buf += chunk
-                        if len(buf) > self.max_bytes:
-                            raise FetchError(f"Document exceeds the {self.max_bytes // 1_000_000} MB limit")
-                    return ctype, bytes(buf)
+                        buf = bytearray()
+                        for chunk in r.iter_bytes():
+                            buf += chunk
+                            if len(buf) > self.max_bytes:
+                                raise FetchError(f"Document exceeds the {self.max_bytes // 1_000_000} MB limit")
+                        return ctype, bytes(buf)
+            raise FetchNotAllowed(f"Too many redirects (over {max_redirects})")
         except httpx.HTTPError as e:
             raise FetchError(f"Could not fetch document: {e}") from None

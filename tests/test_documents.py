@@ -48,16 +48,23 @@ def test_check_rejects_bad_scheme_host_and_private_ip():
         private.check("https://www.bseindia.com/x.pdf")
 
 
-def test_fetch_refuses_redirects_and_caps_size():
+def test_fetch_follows_allowlisted_redirects_but_revalidates():
     def handler(req):
-        if req.url.path == "/redir.pdf":
+        if req.url.path == "/redir.pdf":                      # same-host redirect (BSE-style .aspx)
             return httpx.Response(302, headers={"location": "https://www.bseindia.com/final.pdf"})
+        if req.url.path == "/evil.pdf":                       # redirect OFF the allowlist must be blocked
+            return httpx.Response(302, headers={"location": "https://evil.com/x.pdf"})
+        if req.url.path == "/loop.pdf":
+            return httpx.Response(302, headers={"location": "https://www.bseindia.com/loop.pdf"})
         return httpx.Response(200, headers={"content-type": "application/pdf"}, content=b"%PDF-" + b"a" * 5000)
     f = SafeFetcher(ALLOWED, resolver=public_resolver, transport=httpx.MockTransport(handler))
-    with pytest.raises(FetchNotAllowed, match="Redirect"):
-        f.fetch("https://www.bseindia.com/redir.pdf")
-    small = SafeFetcher(ALLOWED, resolver=public_resolver, max_bytes=1000,
-                        transport=httpx.MockTransport(handler))
+    ctype, body = f.fetch("https://www.bseindia.com/redir.pdf")   # followed to final.pdf
+    assert ctype == "application/pdf" and body.startswith(b"%PDF-")
+    with pytest.raises(FetchNotAllowed, match="allowlist"):
+        f.fetch("https://www.bseindia.com/evil.pdf")
+    with pytest.raises(FetchNotAllowed, match="Too many redirects"):
+        f.fetch("https://www.bseindia.com/loop.pdf")
+    small = SafeFetcher(ALLOWED, resolver=public_resolver, max_bytes=1000, transport=httpx.MockTransport(handler))
     with pytest.raises(FetchError, match="exceeds"):
         small.fetch("https://www.bseindia.com/big.pdf")
 
